@@ -273,6 +273,14 @@ function openMenu(box, x, y) {
   });
   ed.className = 'primary';
   m.append(ed);
+  if (canRemove(box)) {
+    const rm = btn('この枠を消す', () => {
+      closeMenu();
+      removeBox(box);
+    });
+    rm.className = 'danger';
+    m.append(rm);
+  }
   m.hidden = false;
   const mw = m.offsetWidth;
   const mh = m.offsetHeight;
@@ -416,6 +424,57 @@ function splitBox(box, dir, n) {
   return fileChanged(file);
 }
 
+// 枠そのものを消す。分割・格子の中の枠だけが対象。
+// 分割の中の枠が 1 つだけ残ったら、分割をやめて、残った枠を外側の枠の位置に置く
+function canRemove(box) {
+  const parent = box.parent ? findBox(box.parent) : null;
+  return !!(parent && parent.src && box.src && (parent.kind === 'split' || parent.kind === 'grid'));
+}
+
+function hasContent(box) {
+  const slide = curSlide();
+  const inside = (b) => b.path === box.path || (b.parent && inside(findBox(b.parent)));
+  return slide.boxes.some((b) => (b.kind === 'image' || b.kind === 'text') && inside(b));
+}
+
+function removeBox(box) {
+  if (!canRemove(box)) return;
+  if (hasContent(box) && !confirm('この枠と中身を消しますか？')) return;
+  const parent = findBox(box.parent);
+  const listKey = parent.kind === 'split' ? 'children' : 'items';
+  const { file, path, mode } = parent.src;
+  const doc = S.files[file].doc;
+  const pn = parent.node || {};
+  const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
+  const i = sibs.findIndex((b) => b.path === box.path);
+  // 書いてあるとおりの中身を使う（use でテンプレートを呼んでいる枠を、展開した形で書き直さない）
+  const written = mode === 'direct' ? getJS(doc, [...path, listKey]) : null;
+  const list = Array.isArray(written) && written.length === sibs.length ? written : plain(pn[listKey] || []);
+  list.splice(i, 1);
+  const ratio = Array.isArray(pn.ratio) && pn.ratio.length === sibs.length ? [...pn.ratio] : null;
+  if (ratio) ratio.splice(i, 1);
+
+  if (parent.kind === 'split' && list.length === 1 && mode === 'direct') {
+    // 残った 1 つを外側の枠の位置に戻す（外側の id・余白・背景・枠線は残す）
+    const cur = getJS(doc, path) || {};
+    const keep = Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k)));
+    let child = list[0];
+    if (typeof child === 'string') child = { text: child };
+    replaceNode(doc, path, { ...(child || {}), ...keep });
+  } else {
+    const seq = doc.getIn([...path, listKey], true);
+    if (mode === 'direct' && YAML.isSeq(seq) && seq.items.length === sibs.length) {
+      seq.items.splice(i, 1);
+      if (ratio) setProp(doc, path, 'ratio', ratio);
+    } else {
+      setProp(doc, path, listKey, list);
+      if (ratio) setProp(doc, path, 'ratio', ratio);
+    }
+  }
+  S.selected = null;
+  return fileChanged(file);
+}
+
 function clearNode(box) {
   const { file, path, mode } = box.src;
   const doc = S.files[file].doc;
@@ -525,6 +584,11 @@ function renderProps() {
   acts.append(btn('この枠を拡大', () => focusOn(box.path)));
   if (mode === 'direct') {
     if (typeof box.src.path.at(-1) === 'number') acts.append(btn('前の枠と入れ替える', () => moveNode(box, -1)), btn('次の枠と入れ替える', () => moveNode(box, 1)));
+  }
+  if (canRemove(box)) {
+    const rb = btn('この枠を消す', () => removeBox(box));
+    rb.className = 'danger';
+    acts.append(rb);
   }
   if (box.kind !== 'empty' && box.depth > 0) {
     const b = btn('中身を消す', () => confirm('この枠の中身を消しますか？') && clearNode(box));
