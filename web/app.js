@@ -796,9 +796,10 @@ function renderGlobal() {
   };
 
   // 枠を編集しているあいだは折りたたむ。選ぶ枠が変わったときだけ開閉を決め直し、それ以外は利用者の開閉を保つ
-  if (S.globalFor !== S.selected) {
-    S.globalOpen = !S.selected;
-    S.globalFor = S.selected;
+  const selKey = (S.sel || []).join('|');
+  if (S.globalFor !== selKey) {
+    S.globalOpen = !selKey; // 1 つでも複数でも、ボックスを選んでいるあいだは折りたたむ
+    S.globalFor = selKey;
   }
   const fold = document.createElement('details');
   fold.open = S.globalOpen;
