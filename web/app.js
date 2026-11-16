@@ -108,7 +108,6 @@ async function rebuild() {
   status(S.error || '', !!S.error);
   renderSlideTabs();
   renderPreview();
-  renderGlobal();
   renderProps();
   $('#btn-save').disabled = !anyDirty();
 }
@@ -530,6 +529,7 @@ function setChildCount(box, listKey, n) {
 // ---------------------------------------------------------------- 設定欄
 
 function renderProps() {
+  renderGlobal();
   const el = $('#node');
   el.innerHTML = '';
   if (!S.layout) return;
@@ -644,7 +644,19 @@ function renderGlobal() {
     return fileChanged('layout.yaml');
   };
 
-  el.append(h('h2', null, 'スライド全体'));
+  // 枠を編集しているあいだは折りたたむ。選ぶ枠が変わったときだけ開閉を決め直し、それ以外は利用者の開閉を保つ
+  if (S.globalFor !== S.selected) {
+    S.globalOpen = !S.selected;
+    S.globalFor = S.selected;
+  }
+  const fold = document.createElement('details');
+  fold.open = S.globalOpen;
+  fold.ontoggle = () => (S.globalOpen = fold.open);
+  const sum = document.createElement('summary');
+  sum.append(h('h2', null, 'スライド全体'), h('span', 'sum-size', `${fmt(W)} × ${fmt(H)} ${unit}`));
+  const body = h('div');
+  fold.append(sum, body);
+  el.append(fold);
 
   const wIn = numEl(c.width ?? '', '', (v) => {
     if (!(+v > 0)) return;
@@ -684,7 +696,7 @@ function renderGlobal() {
     set([['width', fromCm(w)], ['height', fromCm(hh)]]);
   });
 
-  el.append(
+  body.append(
     row('幅', h2(wIn, unit)),
     row('高さ', h2(hIn, unit)),
     row('単位', unitIn),
@@ -694,7 +706,7 @@ function renderGlobal() {
   );
   const acts = h('div', 'actions');
   acts.append(btn('縦と横を入れ替える', () => set([['width', H], ['height', W]])));
-  el.append(acts);
+  body.append(acts);
   for (const i of S.layout.issues || []) el.append(h('p', 'warn', i.msg));
 }
 
@@ -721,7 +733,7 @@ function sizeFields(box) {
   };
 
   const fs = fieldset('この枠の大きさ');
-  const mode = selectEl([['ratio', '比率で決める'], ['len', '長さで決める']], isLen(ratio[i]) ? 'len' : 'ratio', (v) => {
+  const mode = selectEl([['ratio', '比率で指定'], ['len', '長さで指定']], isLen(ratio[i]) ? 'len' : 'ratio', (v) => {
     if (v === 'len') return write(`${r3(lenOf(box))}${u}`);
     // 比率に戻すときは、今の大きさを保つ比にする（比率で決めているほかの部分を基準にする）
     const j = sibs.findIndex((b, k) => k !== i && !isLen(ratio[k]) && ratio[k] > 0);
@@ -739,7 +751,7 @@ function sizeFields(box) {
   }
   if (parent.src.mode === 'shared') fs.append(h('p', 'warn', 'この大きさは、同じテンプレートを使う全てのスライドで共通です。'));
   fs.append(
-    row(`${dim}の決め方`, mode),
+    row(`${dim}の指定`, mode),
     row(dim, valueIn, hint),
     h('div', 'note', `今の${dim} ${fmt(lenOf(box))} ${u}`),
   );
