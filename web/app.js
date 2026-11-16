@@ -582,8 +582,17 @@ function setChildCount(box, listKey, n) {
 
 // ---------------------------------------------------------------- 設定欄
 
+// 名前の列の幅を、画面に出ている名前のうち最も長いものに合わせる（入力欄の左端を全部揃える）
+function fitLabels() {
+  const aside = document.querySelector('aside');
+  aside.style.setProperty('--label-w', 'max-content');
+  const ws = [...aside.querySelectorAll('.row > label')].map((l) => l.getBoundingClientRect().width);
+  aside.style.setProperty('--label-w', `${Math.ceil(Math.max(40, ...ws))}px`);
+}
+
 function renderProps() {
   renderGlobal();
+  queueMicrotask(fitLabels);
   if (S.keepPanel && S.keepPanel === S.selected) {
     S.keepPanel = null;
     return;
@@ -807,7 +816,10 @@ function renderGlobal() {
   }
   const fold = document.createElement('details');
   fold.open = S.globalOpen;
-  fold.ontoggle = () => (S.globalOpen = fold.open);
+  fold.ontoggle = () => {
+    S.globalOpen = fold.open;
+    fitLabels();
+  };
   const sum = document.createElement('summary');
   sum.append(h('h2', null, 'スライド全体'), h('span', 'sum-size', `${fmt(W)} × ${fmt(H)} ${unit}`));
   const body = h('div');
@@ -1037,7 +1049,7 @@ function textFields(box, node, inh) {
     row('見出しアイコン', selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined))),
     ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, 'icon_size', +v)), 'pt'))] : []),
     alignRow(box, node, inh, 'left', 'top'),
-    row('行の高さ', numEl(node.line_height ?? inh.line_height ?? 1.2, '', (v) => +v > 0 && edit(box, 'line_height', +v), 0.05)),
+    row('行間', h2(numEl(node.line_height ?? inh.line_height ?? 1.2, '', (v) => +v > 0 && edit(box, 'line_height', +v), 0.05), '倍')),
   );
   return fs;
 }

@@ -49,8 +49,8 @@ aside .warn { margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: #
 /* 設定欄 */
 fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; padding: 6px 10px 10px; }
 legend { color: var(--muted); padding: 0 4px; }
-.row { display: grid; grid-template-columns: 7.5em 1fr; align-items: center; gap: 6px; margin-top: 6px; }
-.row > label { color: #374151; }
+.row { display: grid; grid-template-columns: var(--label-w, 7.5em) 1fr; align-items: center; gap: 6px; margin-top: 6px; }
+.row > label { color: #374151; white-space: nowrap; }
 .row .in { display: flex; gap: 4px; align-items: center; min-width: 0; }
 .row input[type=text], .row input[type=number], .row select, .row textarea {
   width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; background: #fff;
@@ -157,3 +157,5 @@ legend { color: var(--muted); padding: 0 4px; }
 .row .pad4 input[type=number] { width: 3.1em; padding: 3px 4px; }
 .ratio-in { border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; background: #fff; }
 .ratio-sep { margin: 0 2px; }
+/* 枠（fieldset）の外の行も、枠の中の行と入力の左端を揃える */
+#node > .row, #global .row { padding: 0 11px; }
