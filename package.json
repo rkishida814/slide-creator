@@ -1,0 +1,22 @@
+{
+  "name": "slide-creator",
+  "version": "0.1.0",
+  "description": "決まった型で図と文字を置いていくスライド・ポスター作成ツール（設定ファイルが正本）",
+  "main": "src/core/layout.js",
+  "scripts": {
+    "demo": "node examples/make-assets.js && node bin/slide.js check examples/demo && node bin/slide.js export examples/demo"
+  },
+  "author": "",
+  "license": "UNLICENSED",
+  "type": "module",
+  "dependencies": {
+    "image-size": "^2.1.0",
+    "pptxgenjs": "^4.0.1",
+    "puppeteer-core": "^25.17.0",
+    "yaml": "^2.9.1"
+  },
+  "bin": {
+    "slide": "bin/slide.js"
+  },
+  "private": true
+}

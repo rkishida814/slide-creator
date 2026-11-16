@@ -1,0 +1,20 @@
+# slide-creator の設定ファイル。書き方は README.md を参照。
+canvas: {width: 33.867, height: 19.05, unit: cm}   # 16:9
+
+defaults:
+  font: {size: 18, family: Arial}
+
+slides:
+  - id: s1
+    root:
+      split: rows
+      ratio: ["2.5cm", 1]
+      padding: 1
+      gap: 0.5
+      children:
+        - id: title
+          text: "タイトル"
+          font: {size: 32, bold: true}
+          valign: middle
+        - id: body
+          text: "本文"

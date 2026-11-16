@@ -1,0 +1,69 @@
+# 見本：タイトル／左に画像 3列×2行／右にメモ。2枚目はテンプレートの使い回し。
+canvas: {width: 33.867, height: 19.05, unit: cm}   # 16:9
+
+defaults:
+  font: {size: 18, family: Arial}
+
+check:
+  min_dpi: 150
+
+templates:
+  # 上にタイトル、下を左右 2:1 に分け、左を 3×2 の画像、右を文字にする型
+  photos_and_note:
+    split: rows
+    ratio: ["2.4cm", 1]
+    padding: 1
+    gap: 0.5
+    children:
+      - id: title
+        text: ""
+        font: {size: 30, bold: true}
+        valign: middle
+      - split: cols
+        ratio: [2, 1]
+        gap: 0.8
+        children:
+          - id: photos
+            grid: {rows: 2, cols: 3, gap: 0.3}
+            fit: cover
+            items: []
+          - id: note
+            text: ""
+            line_height: 1.4
+
+slides:
+  - id: s1
+    use: photos_and_note
+    fill:
+      title: {text: "結果：6条件の比較"}
+      photos:
+        items:
+          - {image: assets/a1.png}
+          - {image: assets/a2.png, crop: [0.3, 0.0, 1.0, 1.0]}   # 左30%を切る
+          - {image: assets/a3.png, valign: top}                 # 縦長を上側で合わせて切る
+          - {image: assets/a4.png}
+          - {image: assets/a5.png, fit: contain}               # 切らずに収める
+          - {image: assets/a6.png}
+      note: {text: "・条件Aで最大\n・条件Fは解像度が低い見本\n・右の列は fit: cover"}
+
+  - id: s2
+    background: "F4F6F8"
+    root:
+      split: cols
+      ratio: [1, 1]
+      padding: 1
+      gap: 1
+      children:
+        - id: left
+          use: photos_and_note
+          padding: 0
+          fill:
+            title: {text: "左の型", font: {size: 22, bold: true}}
+            photos: {grid: {rows: 2, cols: 2, gap: 0.2}, items: [{image: assets/a1.png}, {image: assets/a2.png}, {image: assets/a3.png}, {image: assets/a4.png}]}
+            note: {text: "同じ型を小さく使う", font: {size: 12}}
+        - id: right
+          text: "右半分：中央揃えの文字"
+          align: center
+          valign: middle
+          font: {size: 28, color: "#335577"}
+          border: {width: 1.5, color: "#335577"}
