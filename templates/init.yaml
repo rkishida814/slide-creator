@@ -1,5 +1,5 @@
 # slide-creator の設定ファイル。書き方は README.md を参照。
-canvas: {width: 33.867, height: 19.05, unit: cm}   # 16:9
+canvas: {width: 32, height: 18, unit: cm}   # 16:9
 
 defaults:
   font: {size: 18, family: Arial}

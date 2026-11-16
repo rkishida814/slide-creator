@@ -63,7 +63,7 @@ node bin/slide.js export my-poster                     # PPTX と PDF（--pptx /
 ## layout.yaml の書き方
 
 ```yaml
-canvas: {width: 33.867, height: 19.05, unit: cm}   # 1枚の大きさ。unit は cm / mm / in / pt / px
+canvas: {width: 32, height: 18, unit: cm}   # 1枚の大きさ。unit は cm / mm / in / pt / px
 defaults:                                          # 全体の既定（下の「引き継ぐ設定」）
   font: {size: 18, family: Arial}
 check: {min_dpi: 150}                              # これ未満の画像を警告

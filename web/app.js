@@ -608,8 +608,8 @@ const PAPERS = [
   ['B0 横', 145.6, 103],
   ['B1 縦', 72.8, 103],
   ['B1 横', 103, 72.8],
-  ['PowerPoint の標準 16:9', 33.867, 19.05],
-  ['PowerPoint の標準 4:3', 25.4, 19.05],
+  ['16:9 のスライド', 32, 18],
+  ['4:3 のスライド', 32, 24],
 ];
 const RATIOS = [
   ['16:9', 16 / 9],
@@ -961,7 +961,7 @@ function normColor(v) {
   if (/^[0-9a-f]{3}$/i.test(s)) return `#${s.split('').map((c) => c + c).join('')}`;
   return null;
 }
-const fmt = (v) => (+v).toFixed(2);
+const fmt = (v) => (+v).toFixed(2).replace(/\.?0+$/, '');
 function fmtList(v) {
   if (v == null) return '';
   return Array.isArray(v) ? v.join(', ') : String(v);
