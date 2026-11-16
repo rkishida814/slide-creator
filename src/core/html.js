@@ -1,8 +1,11 @@
 // 配置結果 → HTML。PDF/PNG 出力（Chrome）とブラウザ版の表示で共用する。
+import { richToHTML } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
 // PPTX と同じ既定フォント（Arial）。和文は PowerPoint 側では Office テーマの東アジアフォントになる
 export const DEFAULT_FONT = 'Arial';
+// 画面で選べるフォント。Noto Sans JP は Google Fonts から読み込む（PowerPoint では、その PC に入っているときだけ同じ字形になる）
+export const FONTS = ['Helvetica', 'Arial', 'Times New Roman', 'Noto Sans JP'];
 const FALLBACK_FONTS = `'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif`;
 
 export function color(c, fallback = '#000000') {
@@ -41,11 +44,13 @@ export function renderHTML(layout, opts = {}) {
 
   return `<!doctype html>
 <html><head><meta charset="utf-8">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap">
 <style>
 @page { size: ${L(layout.width)} ${L(layout.height)}; margin: 0; }
 html, body { margin: 0; padding: 0; background: #fff; }
 .slide { position: relative; overflow: hidden; background: #fff; break-after: page; }
-.slide > div { position: absolute; box-sizing: border-box; }
+.slide > div { position: absolute; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+.tex { background-repeat: repeat; background-position: 0 0; }
 .img { overflow: hidden; }
 .img img { position: absolute; display: block; max-width: none; }
 .txt { display: flex; flex-direction: column; overflow: visible; }
@@ -70,6 +75,10 @@ function renderElement(e, L, opts) {
     const bc = e.border ? color(e.border.color) : 'transparent';
     return `<div ${data} style="${pos(e.rect, L)};background:${e.fill ? color(e.fill) : 'transparent'};border:${bw} solid ${bc}"></div>`;
   }
+  if (e.type === 'texture') {
+    const url = opts.srcURL ? opts.srcURL(e.src) : e.src;
+    return `<div ${data} class="tex" style="${pos(e.rect, L)};background-image:url('${esc(url)}');background-size:${L(e.tileW)} auto"></div>`;
+  }
   if (e.type === 'missing') return `<div ${data} class="missing" style="${pos(e.rect, L)}"></div>`;
   if (e.type === 'image') {
     const [l, t, r, b] = e.crop;
@@ -93,7 +102,7 @@ function renderElement(e, L, opts) {
       `color:${color(f.color, '#000000')}`,
       `line-height:${e.line_height}`,
     ].join(';');
-    return `<div ${data} class="txt" style="${st}"><div>${esc(e.text)}</div></div>`;
+    return `<div ${data} class="txt" style="${st}"><div>${richToHTML(e.text)}</div></div>`;
   }
   return '';
 }

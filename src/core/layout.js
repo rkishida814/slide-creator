@@ -41,7 +41,7 @@ export function layoutDoc(doc, env) {
     const id = slide.id || `s${i + 1}`;
     const ctx = { unit, minDpi, env, boxes: [], elements: [], issues: [], ids: new Set(), slideId: id };
     const inh = pickInherit(doc.defaults || {}, {});
-    if (slide.background) ctx.elements.push({ type: 'rect', path: id, rect: { x: 0, y: 0, w: W, h: H }, fill: slide.background });
+    pushBackground(slide.background ?? doc.background, { x: 0, y: 0, w: W, h: H }, id, ctx);
     walk(slide.root, { x: 0, y: 0, w: W, h: H }, inh, `${id}`, ctx, 0, null);
     return { id, rect: { x: 0, y: 0, w: W, h: H }, boxes: ctx.boxes, elements: ctx.elements, issues: ctx.issues };
   });
@@ -75,9 +75,8 @@ function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
   const style = pickInherit(node, inherited);
   // 画面の設定欄で使う（JSON には出さない）
   Object.defineProperties(box, { node: { value: node }, inherited: { value: inherited }, style: { value: style } });
-  if (node.background || node.border) {
-    ctx.elements.push({ type: 'rect', path, rect, fill: node.background || null, border: node.border || null });
-  }
+  pushBackground(node.background, rect, path, ctx);
+  if (node.border) ctx.elements.push({ type: 'rect', path, rect, fill: null, border: node.border });
   const pad = parseBox(node.padding, ctx.unit);
   const inner = { x: rect.x + pad.l, y: rect.y + pad.t, w: rect.w - pad.l - pad.r, h: rect.h - pad.t - pad.b };
   if (inner.w <= 0 || inner.h <= 0) {
@@ -193,6 +192,46 @@ function layoutImage(node, rect, style, path, ctx) {
     ctx.issues.push({ level: 'warn', path, msg: `画像の解像度が低い: ${Math.round(dpi)} dpi（基準 ${ctx.minDpi}）${src}` });
   }
   ctx.elements.push({ type: 'image', path, src, rect: disp, cell: rect, crop: [l, t, r, b], natural: nat, dpi: Math.round(dpi) });
+}
+
+// 背景。色だけなら "#RRGGBB"。画像を使うときは
+//   { image: 画像のファイル, mode: tile（並べる・既定）| cover（広げる）, tile: 模様 1 つの幅, color: 下地の色 }
+// tile を省くと、画像を 96 dpi として測った幅にする
+function pushBackground(bg, rect, path, ctx) {
+  if (!bg) return;
+  if (typeof bg !== 'object') {
+    ctx.elements.push({ type: 'rect', path, rect, fill: bg });
+    return;
+  }
+  if (bg.color) ctx.elements.push({ type: 'rect', path, rect, fill: bg.color });
+  if (!bg.image) return;
+  const nat = ctx.env.imageSize(bg.image);
+  if (!nat) {
+    ctx.issues.push({ level: 'error', path, msg: `背景の画像が読めない: ${bg.image}` });
+    return;
+  }
+  if (bg.mode === 'cover') {
+    // 枠いっぱいに広げ、はみ出しを中央から切る
+    const ia = nat.w / nat.h;
+    const ba = rect.w / rect.h;
+    let crop = [0, 0, 1, 1];
+    if (ia > ba) {
+      const keep = ba / ia;
+      crop = [(1 - keep) / 2, 0, (1 + keep) / 2, 1];
+    } else {
+      const keep = ia / ba;
+      crop = [0, (1 - keep) / 2, 1, (1 + keep) / 2];
+    }
+    const dpi = ((crop[2] - crop[0]) * nat.w) / (rect.w / perInch(ctx.unit));
+    ctx.elements.push({ type: 'image', path, src: bg.image, rect, cell: rect, crop, natural: nat, dpi: Math.round(dpi), background: true });
+    return;
+  }
+  const tileW = bg.tile != null ? toUnit(bg.tile, ctx.unit) : (nat.w / 96) * perInch(ctx.unit);
+  if (!(tileW > 0)) {
+    ctx.issues.push({ level: 'error', path, msg: `背景の模様の幅が不正: ${bg.tile}` });
+    return;
+  }
+  ctx.elements.push({ type: 'texture', path, rect, src: bg.image, tileW, natural: nat });
 }
 
 function layoutText(node, rect, style, path, ctx) {

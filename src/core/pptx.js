@@ -4,6 +4,7 @@
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
 import { DEFAULT_FONT } from './html.js';
+import { parseRich, hasRich } from './richtext.js';
 
 const hex = (c, fb) => {
   if (!c) return fb;
@@ -51,9 +52,14 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
             : { w: box.w, h: box.h }),
           altText: e.path,
         });
+      } else if (e.type === 'texture') {
+        // 画像を 1 枚だけ置き、書き出した後で「図を並べて表示」に書き換える（finishPPTX）。
+        // 並べる倍率は、画像を 96 dpi とみなした大きさに対する、模様 1 つの幅の比
+        const scale = Math.round(((e.tileW * k) / (e.natural.w / 96)) * 100000);
+        slide.addImage({ ...(await imageRef(e.src)), ...box, objectName: `sc-tile:${scale}`, altText: e.path });
       } else if (e.type === 'text') {
         const f = e.font;
-        slide.addText(e.text, {
+        slide.addText(textRuns(e.text, f), {
           ...box,
           fontFace: f.family || DEFAULT_FONT,
           fontSize: f.size,
@@ -72,4 +78,47 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
     }
   }
   return pres;
+}
+
+// 飾りの無い文字はそのまま。飾りがあれば、区切り（run）の配列にする
+function textRuns(text, f) {
+  if (!hasRich(text)) return text;
+  const runs = [];
+  for (const g of parseRich(text)) {
+    const lines = g.text.split('\n');
+    lines.forEach((t, j) => {
+      const options = {};
+      if (g.b || f.bold) options.bold = true;
+      if (g.i || f.italic) options.italic = true;
+      if (g.sup) options.superscript = true;
+      else if (g.sub) options.subscript = true;
+      if (j < lines.length - 1) options.breakLine = true;
+      runs.push({ text: t, options });
+    });
+  }
+  return runs;
+}
+
+/**
+ * pptxgenjs で作ったものを書き出し、並べる背景（sc-tile）の画像を「図を並べて表示」に書き換える。
+ * @param JSZip  Node では jszip、ブラウザでは window.JSZip
+ * @param type   'nodebuffer' / 'blob' / 'arraybuffer'
+ */
+export async function finishPPTX(pres, JSZip, type) {
+  const buf = await pres.write({ outputType: 'arraybuffer' });
+  const zip = await JSZip.loadAsync(buf);
+  for (const name of Object.keys(zip.files)) {
+    if (!/^ppt\/slides\/slide\d+\.xml$/.test(name)) continue;
+    const xml = await zip.file(name).async('string');
+    if (!xml.includes('name="sc-tile:')) continue;
+    const fixed = xml.replace(/<p:pic>[\s\S]*?<\/p:pic>/g, (pic) => {
+      const m = pic.match(/name="sc-tile:(\d+)"/);
+      if (!m) return pic;
+      return pic
+        .replace(/<a:stretch>\s*<a:fillRect\/>\s*<\/a:stretch>/, `<a:tile tx="0" ty="0" sx="${m[1]}" sy="${m[1]}" flip="none" algn="tl"/>`)
+        .replace(/name="sc-tile:\d+"/, 'name="背景（模様）"');
+    });
+    zip.file(name, fixed);
+  }
+  return zip.generateAsync({ type, compression: 'DEFLATE' });
 }
