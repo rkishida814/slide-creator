@@ -3,6 +3,7 @@ import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML } from '../src/core/html.js';
 import { buildPPTX } from '../src/core/pptx.js';
+import { PER_INCH } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
@@ -294,6 +295,7 @@ function renderIssues() {
   el.innerHTML = '';
   const list = [];
   if (S.error) list.push({ level: 'error', path: '', msg: S.error });
+  list.push(...(S.layout?.issues || []));
   for (const s of S.layout?.slides || []) list.push(...s.issues.map((i) => ({ ...i, slide: s.id })));
   list.push(...S.overflow.map((i) => ({ ...i, slide: S.slideId })));
   $('#issue-count').textContent = list.length ? `(${list.length})` : '';
@@ -459,10 +461,11 @@ function renderProps() {
   if (!S.layout) return;
   const box = S.selected ? findBox(S.selected) : null;
   if (!box) {
-    el.innerHTML = `<p class="note">プレビューで枠をクリックすると、ここに設定が出ます。</p>
-      <p class="note">キャンバス：${fmt(S.layout.width)} × ${fmt(S.layout.height)} ${S.layout.unit}、スライド ${S.layout.slides.length} 枚</p>`;
+    el.append(canvasFields());
+    el.append(h('p', 'note', `スライド ${S.layout.slides.length} 枚。プレビューで枠をクリックすると、その枠の設定が出ます。`));
     return;
   }
+  if (box.depth === 0) el.append(canvasFields());
   const node = box.node || {};
   const inh = box.inherited || {};
   const u = S.layout.unit;
@@ -530,6 +533,70 @@ function renderProps() {
     acts.append(b);
   }
   el.append(acts);
+}
+
+// 1 枚の大きさ（全スライド共通）。値は cm で持ち、書き込むときに YAML の単位に直す
+const CANVAS_PRESETS = [
+  ['16:9（PowerPoint 標準）', 33.867, 19.05],
+  ['4:3', 25.4, 19.05],
+  ['A0 縦', 84.1, 118.9],
+  ['A0 横', 118.9, 84.1],
+  ['A1 縦', 59.4, 84.1],
+  ['A1 横', 84.1, 59.4],
+  ['B0 縦（PowerPoint の上限超え）', 103, 145.6],
+  ['B0 横（PowerPoint の上限超え）', 145.6, 103],
+  ['B1 縦', 72.8, 103],
+  ['B1 横', 103, 72.8],
+];
+
+function canvasFields() {
+  const doc = S.files['layout.yaml'].doc;
+  const c = getJS(doc, ['canvas']) || {};
+  const unit = c.unit || 'cm';
+  const toCm = (v) => (+v / PER_INCH[unit]) * 2.54;
+  const fromCm = (v) => Math.round(((v / 2.54) * PER_INCH[unit]) * 1000) / 1000;
+  const wCm = toCm(c.width);
+  const hCm = toCm(c.height);
+  const hit = CANVAS_PRESETS.findIndex(([, w, hh]) => Math.abs(w - wCm) < 0.05 && Math.abs(hh - hCm) < 0.05);
+
+  const editCanvas = (pairs) => {
+    for (const [k, v] of pairs) setProp(doc, ['canvas'], k, v);
+    return fileChanged('layout.yaml');
+  };
+  const fs = fieldset('キャンバス（1 枚の大きさ・全スライド共通）');
+  const presetOpts = [['', '自由に指定'], ...CANVAS_PRESETS.map(([l, w, hh], i) => [String(i), `${l}　${w} × ${hh} cm`])];
+  fs.append(
+    row('よく使う大きさ', selectEl(presetOpts, hit >= 0 ? String(hit) : '', (v) => {
+      if (v === '') return;
+      const [, w, hh] = CANVAS_PRESETS[+v];
+      editCanvas([['width', fromCm(w)], ['height', fromCm(hh)]]);
+    })),
+    row('幅 × 高さ', h2(
+      numEl(c.width ?? '', '', (v) => v !== '' && +v > 0 && editCanvas([['width', +v]])),
+      '×',
+      numEl(c.height ?? '', '', (v) => v !== '' && +v > 0 && editCanvas([['height', +v]])),
+      selectEl([['cm', 'cm'], ['mm', 'mm'], ['in', 'in'], ['pt', 'pt'], ['px', 'px']], unit, (nu) => {
+        const k = PER_INCH[nu] / PER_INCH[unit];
+        const r = (v) => Math.round(+v * k * 1000) / 1000;
+        editCanvas([['width', r(c.width)], ['height', r(c.height)], ['unit', nu]]);
+      }),
+    )),
+  );
+  const acts = h('div', 'actions');
+  acts.append(btn('縦と横を入れ替える', () => editCanvas([['width', c.height], ['height', c.width]])));
+  fs.append(acts);
+  // 20 以下の整数比で 0.3% 以内に収まれば、それで表す（33.867 × 19.05 → 16:9）
+  let ratio = `${(wCm / hCm).toFixed(3)} : 1`;
+  outer: for (let q = 1; q <= 20; q++) {
+    for (let p = 1; p <= 20; p++) {
+      if (Math.abs(p / q / (wCm / hCm) - 1) < 0.003) {
+        ratio = `${p}:${q}`;
+        break outer;
+      }
+    }
+  }
+  fs.append(h('div', 'note', `縦横比 ${ratio}。中の枠は比率で決まるので、大きさを変えても配置の関係は保たれます（文字の pt は変わらないので、大きくしたら文字も大きくしてください）。`));
+  return fs;
 }
 
 function findTemplateName(box) {

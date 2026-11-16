@@ -83,7 +83,7 @@ async function main() {
 
   if (cmd === 'check') {
     const { measureText } = await import('../src/node/chrome.js');
-    const issues = project.layout.slides.flatMap((s) => s.issues);
+    const issues = [...project.layout.issues, ...project.layout.slides.flatMap((s) => s.issues)];
     for (const o of await measureText(project)) {
       issues.push({
         level: 'error',

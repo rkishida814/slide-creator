@@ -30,6 +30,13 @@ export function layoutDoc(doc, env) {
   const H = toUnit(doc.canvas.height, unit);
   if (!(W > 0 && H > 0)) throw new Error('canvas の width / height が不正です');
   const minDpi = doc.check?.min_dpi ?? 150;
+  const issues = [];
+  // PowerPoint のスライドは 1 辺 56 インチ（142.24 cm）まで
+  const maxIn = 56;
+  for (const [name, v] of [['幅', W], ['高さ', H]]) {
+    const inch = v / { in: 1, cm: 2.54, mm: 25.4, pt: 72, px: 96 }[unit];
+    if (inch > maxIn) issues.push({ level: 'warn', path: 'canvas', msg: `${name} ${(inch * 2.54).toFixed(1)} cm は PowerPoint の上限 142.24 cm を超える（PPTX は PowerPoint で正しく開けないおそれがある。PDF は出せる）` });
+  }
   const slides = (doc.slides || []).map((slide, i) => {
     const id = slide.id || `s${i + 1}`;
     const ctx = { unit, minDpi, env, boxes: [], elements: [], issues: [], ids: new Set(), slideId: id };
@@ -41,7 +48,7 @@ export function layoutDoc(doc, env) {
   const ids = slides.map((s) => s.id);
   const dup = ids.filter((x, i) => ids.indexOf(x) !== i);
   if (dup.length) throw new Error(`スライドの id が重複: ${dup.join(', ')}`);
-  return { unit, width: W, height: H, font: doc.defaults?.font, slides };
+  return { unit, width: W, height: H, font: doc.defaults?.font, slides, issues };
 }
 
 function pickInherit(node, base) {
