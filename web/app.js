@@ -49,7 +49,7 @@ async function openSource(source) {
     $('#project-name').textContent = source.name + (source.writable ? '' : '（見本）');
     document.title = `${source.name} — slide-creator`;
     $('#empty').hidden = true;
-    for (const id of ['#btn-reload', '#btn-pptx', '#btn-pdf']) $(id).disabled = false;
+    for (const id of ['#btn-pptx', '#btn-pdf']) $(id).disabled = false;
     await rebuild();
     status('');
   } catch (e) {
@@ -179,8 +179,12 @@ function setupFrame() {
     d.className = cls;
     sec.append(d);
   }
-  doc.addEventListener('click', (e) => selectAt(e, false));
-  doc.addEventListener('dblclick', (e) => selectAt(e, true));
+  doc.addEventListener('click', (e) => {
+    const box = boxAt(e);
+    if (!box) return closeMenu();
+    const fr = $('#frame').getBoundingClientRect();
+    openMenu(box, fr.left + e.clientX, fr.top + e.clientY);
+  });
   doc.addEventListener('keydown', onKey);
   applyView();
   measureOverflow(doc);
@@ -214,7 +218,8 @@ function applyView() {
   const dim = sec.querySelector('.focusdim');
   place(dim, fb ? fb.rect : null);
   dim.style.boxShadow = `0 0 0 ${Math.max(S.layout.width, S.layout.height) * ppu}px rgba(40, 44, 52, .45)`;
-  const sel = S.selected ? findBox(S.selected) : null;
+  const selPath = S.pending || S.selected;
+  const sel = selPath ? findBox(selPath) : null;
   const selEl = sec.querySelector('.sel');
   place(selEl, sel ? sel.rect : null);
   selEl.style.outline = `${2.5 / s}px solid #2563eb`;
@@ -224,9 +229,10 @@ function applyView() {
   $('#btn-whole').disabled = !S.focus;
 }
 
-function selectAt(e, zoom) {
+// クリックした点を含む、いちばん内側の枠
+function boxAt(e) {
   const slide = curSlide();
-  if (!slide || !S.view) return;
+  if (!slide || !S.view) return null;
   const { s, offX, offY, r } = S.view;
   const x = (e.clientX - offX) / s / S.ppu + r.x;
   const y = (e.clientY - offY) / s / S.ppu + r.y;
@@ -235,9 +241,51 @@ function selectAt(e, zoom) {
     const q = b.rect;
     if (x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h && (!best || b.depth >= best.depth)) best = b;
   }
-  if (!best) return;
-  select(best.path);
-  if (zoom) focusOn(best.path);
+  return best;
+}
+
+// 枠をクリックしたときのメニュー：分けるか、編集するか
+function openMenu(box, x, y) {
+  const m = $('#menu');
+  S.pending = box.path;
+  applyView();
+  m.innerHTML = '';
+  m.append(h('div', 'menu-title', `${KIND_LABEL[box.kind]}　${fmt(box.rect.w)} × ${fmt(box.rect.h)} ${S.layout.unit}`));
+  if (box.src) {
+    const count = selectEl([2, 3, 4, 5, 6].map((n) => [String(n), `${n} つ`]), String(S.splitCount || 2), (v) => (S.splitCount = +v));
+    const r = h('div', 'menu-row');
+    r.append(h('span', null, '分ける数'), count);
+    m.append(
+      r,
+      btn('上下に分ける', () => {
+        closeMenu();
+        splitBox(box, 'rows', S.splitCount || 2);
+      }),
+      btn('左右に分ける', () => {
+        closeMenu();
+        splitBox(box, 'cols', S.splitCount || 2);
+      }),
+    );
+  }
+  const ed = btn('この枠を編集', () => {
+    closeMenu();
+    select(box.path);
+  });
+  ed.className = 'primary';
+  m.append(ed);
+  m.hidden = false;
+  const mw = m.offsetWidth;
+  const mh = m.offsetHeight;
+  m.style.left = `${Math.min(x + 8, window.innerWidth - mw - 8)}px`;
+  m.style.top = `${Math.min(y + 8, window.innerHeight - mh - 8)}px`;
+}
+
+function closeMenu() {
+  const m = $('#menu');
+  if (m.hidden) return;
+  m.hidden = true;
+  S.pending = null;
+  applyView();
 }
 
 function select(path) {
@@ -345,12 +393,26 @@ function changeKind(box, kind) {
   return fileChanged(file);
 }
 
-function wrapSplit(box, dir) {
-  const { file, path } = box.src;
+// 枠を n 個に分ける。中身（と揃え方などの設定）は 1 つ目に移し、
+// 枠そのものの設定（id・余白・背景・枠線）は外側に残す。表示の拡大はしない
+const FRAME_KEYS = ['id', 'padding', 'background', 'border'];
+function splitBox(box, dir, n) {
+  const { file, path, mode } = box.src;
   const doc = S.files[file].doc;
-  const cur = getJS(doc, path);
-  replaceNode(doc, path, { split: dir, children: [cur ?? {}, {}] });
-  S.selected = box.path; // 自動の経路は変わる。親の位置を選び直す
+  let pn = plain(box.node || {});
+  if (typeof pn === 'string') pn = { text: pn };
+  const content = Object.fromEntries(Object.entries(pn || {}).filter(([k]) => !FRAME_KEYS.includes(k)));
+  const hasContent = box.kind !== 'empty';
+  const children = Array.from({ length: n }, (_, i) => (i === 0 && hasContent ? content : {}));
+  if (mode === 'direct') {
+    const cur = getJS(doc, path);
+    const keep = cur && typeof cur === 'object' ? Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k))) : {};
+    replaceNode(doc, path, { ...keep, split: dir, children });
+  } else {
+    for (const k of CONTENT_KEYS) setProp(doc, path, k, null);
+    setProp(doc, path, 'split', dir);
+    setProp(doc, path, 'children', children);
+  }
   return fileChanged(file);
 }
 
@@ -460,7 +522,6 @@ function renderProps() {
   if (box.parent) acts.append(btn('外側の枠を選ぶ', () => select(box.parent)));
   acts.append(btn('この枠を拡大', () => focusOn(box.path)));
   if (mode === 'direct') {
-    acts.append(btn('上下に分ける', () => wrapSplit(box, 'rows')), btn('左右に分ける', () => wrapSplit(box, 'cols')));
     if (typeof box.src.path.at(-1) === 'number') acts.append(btn('前の枠と入れ替える', () => moveNode(box, -1)), btn('次の枠と入れ替える', () => moveNode(box, 1)));
   }
   if (box.kind !== 'empty' && box.depth > 0) {
@@ -533,7 +594,7 @@ function renderGlobal() {
   });
 
   const ratioHit = RATIOS.findIndex(([, v]) => Math.abs(v / (W / H) - 1) < 0.003);
-  const ratioOpts = [...(ratioHit < 0 ? [['', `${(W / H).toFixed(3)} : 1（一覧に無い比）`]] : []), ...RATIOS.map(([l], i) => [String(i), l])];
+  const ratioOpts = [...(ratioHit < 0 ? [['', `ユーザー設定（${(W / H).toFixed(3)} : 1）`]] : []), ...RATIOS.map(([l], i) => [String(i), l])];
   const ratioIn = selectEl(ratioOpts, ratioHit >= 0 ? String(ratioHit) : '', (v) => {
     if (v === '') return;
     // 幅を保ち、高さを比に合わせる
@@ -550,7 +611,7 @@ function renderGlobal() {
   });
 
   const paperHit = PAPERS.findIndex(([, w, hh]) => Math.abs(w - toCm(W)) < 0.05 && Math.abs(hh - toCm(H)) < 0.05);
-  const paperOpts = [...(paperHit < 0 ? [['', '一覧に無い大きさ']] : []), ...PAPERS.map(([l, w, hh], i) => [String(i), `${l}（${w} × ${hh} cm）`])];
+  const paperOpts = [...(paperHit < 0 ? [['', 'ユーザー設定']] : []), ...PAPERS.map(([l, w, hh], i) => [String(i), `${l}（${w} × ${hh} cm）`])];
   const paperIn = selectEl(paperOpts, paperHit >= 0 ? String(paperHit) : '', (v) => {
     if (v === '') return;
     const [, w, hh] = PAPERS[+v];
@@ -819,16 +880,6 @@ async function save() {
   }
 }
 
-async function reload() {
-  if (anyDirty() && !confirm('保存していない変更を捨てて、ファイルを読み直しますか？')) return;
-  const keep = { slide: S.slideId, sel: S.selected, focus: S.focus };
-  S.source.forgetImages();
-  for (const f of Object.values(S.files)) f.dirty = false;
-  await openSource(S.source);
-  Object.assign(S, { slideId: keep.slide, selected: keep.sel, focus: keep.focus });
-  await rebuild();
-}
-
 const blobToDataURL = (blob) =>
   new Promise((res, rej) => {
     const r = new FileReader();
@@ -929,6 +980,7 @@ function onKey(e) {
   const tag = (e.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) return;
   const box = S.selected ? findBox(S.selected) : null;
+  if (e.key === 'Escape' && !$('#menu').hidden) return closeMenu();
   if (e.key === 'Escape') {
     if (box?.parent) select(box.parent);
     else if (S.focus) focusOn(null);
@@ -951,9 +1003,7 @@ $('#btn-open').onclick = async () => {
     if (e.name !== 'AbortError') status(e.message, true);
   }
 };
-$('#btn-demo').onclick = () => openSource(new UrlSource('../examples/demo/', 'demo'));
 $('#btn-save').onclick = save;
-$('#btn-reload').onclick = reload;
 $('#btn-pptx').onclick = exportPPTX;
 $('#btn-pdf').onclick = exportPDF;
 $('#btn-focus').onclick = () => S.selected && focusOn(S.selected);
@@ -963,10 +1013,14 @@ $('#chk-outline').onchange = (e) => {
   renderPreview();
 };
 document.addEventListener('keydown', onKey);
+document.addEventListener('mousedown', (e) => {
+  if (!$('#menu').contains(e.target)) closeMenu();
+});
 window.addEventListener('resize', () => applyView());
 window.addEventListener('beforeunload', (e) => {
   if (anyDirty()) e.preventDefault();
 });
 initReopen();
 window.slideCreator = { state: S, buildPPTX }; // 開発者ツールからの確認用
-if (new URLSearchParams(location.search).has('demo')) $('#btn-demo').click();
+// 開発用：URL に ?demo を付けると examples/demo を開く（画面にボタンは出さない）
+if (new URLSearchParams(location.search).has('demo')) openSource(new UrlSource('../examples/demo/', 'demo'));

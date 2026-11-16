@@ -13,10 +13,8 @@
   <strong class="brand">slide-creator</strong>
   <button id="btn-open" title="layout.yaml と画像を入れたフォルダを開く">フォルダを開く</button>
   <button id="btn-reopen" hidden></button>
-  <button id="btn-demo">見本</button>
   <span class="sep"></span>
   <button id="btn-save" disabled title="⌘S">保存</button>
-  <button id="btn-reload" disabled title="保存していない変更を捨てて、フォルダのファイルを読み直す">読み直す</button>
   <span class="sep"></span>
   <button id="btn-pptx" disabled>PPTX に書き出す</button>
   <button id="btn-pdf" disabled title="印刷画面で「PDFに保存」を選ぶ">PDF に書き出す</button>
@@ -43,11 +41,11 @@
       <iframe id="frame" title="プレビュー"></iframe>
       <div id="empty" class="empty">
         <p>「フォルダを開く」で、スライドの設定ファイル <code>layout.yaml</code> と画像を入れたフォルダを選んでください。<code>layout.yaml</code> が無いフォルダを選ぶと、新しく作ります。</p>
-        <p>「見本」で、見本のスライドを開けます。見本はフォルダに保存できません（保存すると、ファイルをダウンロードします）。</p>
       </div>
     </div>
   </div>
 </main>
+<div id="menu" hidden></div>
 <dialog id="crop-dialog">
   <form method="dialog">
     <h3>トリミング <small id="crop-src"></small></h3>
