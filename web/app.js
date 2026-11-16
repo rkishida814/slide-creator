@@ -1106,9 +1106,10 @@ function serializeRich(root) {
 }
 
 // 背景の欄。値は "#RRGGBB"（色）か { image, mode: tile | cover, tile, color }
-const BG_OPTS = [['', 'なし'], ['color', '色'], ['tile', '画像を並べる（模様）'], ['cover', '画像を広げる']];
+// 画像の背景は、画像を並べて敷く（テクスチャ）。layout.yaml の mode: cover（広げる）は書けば効くが、ここでは選ばせない
+const BG_OPTS = [['', 'なし'], ['color', '色'], ['tile', '画像']];
 function bgRows(cur, write) {
-  const kind = !cur ? '' : typeof cur !== 'object' ? 'color' : cur.image ? (cur.mode === 'cover' ? 'cover' : 'tile') : cur.color ? 'color' : '';
+  const kind = !cur ? '' : typeof cur !== 'object' ? 'color' : cur.image ? 'tile' : cur.color ? 'color' : '';
   const rows = [
     row('背景', selectEl(BG_OPTS, kind, (v) => {
       if (v === '') return write(undefined);
@@ -1119,19 +1120,18 @@ function bgRows(cur, write) {
         return renderProps();
       }
       const keep = typeof cur === 'object' && cur ? cur : {};
-      write(v === 'tile' ? { ...keep, image, mode: 'tile' } : { image, mode: 'cover', ...(keep.color ? { color: keep.color } : {}) });
+      write({ ...keep, image, mode: 'tile' });
     })),
   ];
   if (kind === 'color') rows.push(row('色', colorEl(typeof cur === 'string' ? cur : cur.color, (v) => write(v || undefined))));
-  if (kind === 'tile' || kind === 'cover') {
+  if (kind === 'tile') {
     const opts = [...new Set([...S.assets, cur.image])].map((a) => [a, a]);
     rows.push(row('画像', selectEl(opts, cur.image, (v) => write({ ...cur, image: v }))));
-    if (kind === 'tile') {
+    if (cur.mode !== 'cover') {
       const u = S.layout.unit;
       const nat = S.imageSizes.get(cur.image);
       const dflt = nat ? fmt((nat.w / 96) * PER_INCH[u]) : '';
-      const { tile, ...rest } = cur;
-      rows.push(row('模様の幅', h2(numEl(tile ?? dflt, '', (v) => +v > 0 && write({ ...cur, tile: +v })), u), '模様 1 つの幅'));
+      rows.push(row('画像1枚の幅', h2(numEl(cur.tile ?? dflt, '', (v) => +v > 0 && write({ ...cur, tile: +v })), u)));
     }
   }
   return rows;
