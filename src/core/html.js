@@ -2,8 +2,8 @@
 import { richToHTML } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
-// PPTX と同じ既定フォント（Arial）。和文は PowerPoint 側では Office テーマの東アジアフォントになる
-export const DEFAULT_FONT = 'Arial';
+// PPTX と同じ既定フォント（Helvetica）。和文は PowerPoint 側では Office テーマの東アジアフォントになる
+export const DEFAULT_FONT = 'Helvetica';
 // 画面で選べるフォント。Noto Sans JP は Google Fonts から読み込む（PowerPoint では、その PC に入っているときだけ同じ字形になる）
 export const FONTS = ['Helvetica', 'Arial', 'Times New Roman', 'Noto Sans JP'];
 const FALLBACK_FONTS = `'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif`;

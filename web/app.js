@@ -1,7 +1,7 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
-import { renderHTML, FONTS } from '../src/core/html.js';
+import { renderHTML, FONTS, DEFAULT_FONT } from '../src/core/html.js';
 import { richToHTML } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit } from '../src/core/units.js';
@@ -469,7 +469,7 @@ function changeKind(box, kind) {
     split: { split: 'rows', children: [{}, {}] },
     grid: { grid: { rows: 2, cols: 2 }, items: [{}, {}, {}, {}] },
     image: { image: S.assets[0] || 'assets/' },
-    text: { text: '（ここに文字を入力）' },
+    text: { text: '' },
   }[kind];
   if (mode === 'direct') {
     const cur = getJS(doc, path);
@@ -602,7 +602,9 @@ function renderProps() {
   const node = box.node || {};
   const inh = box.inherited || {};
   const u = S.layout.unit;
-  el.append(h('p', 'meta', `${KIND_LABEL[box.kind]}　${fmt(box.rect.w)} × ${fmt(box.rect.h)} ${u}`));
+  // 中身の無いボックスは、初めから文字のボックスとして扱う
+  const kind = box.kind === 'empty' ? 'text' : box.kind;
+  el.append(h('p', 'meta', `${KIND_LABEL[kind]}　${fmt(box.rect.w)} × ${fmt(box.rect.h)} ${u}`));
   if (!box.src) return;
   const mode = box.src.mode;
   if (mode === 'shared') el.append(h('p', 'warn', 'このボックスは、複数のスライドで共通に使うボックスの組み合わせ（テンプレート）の一部です。変えると、このテンプレートを使う全てのスライドが変わります。'));
@@ -610,14 +612,11 @@ function renderProps() {
   // 種類
   const fsSize = sizeFields(box);
   if (fsSize) el.append(fsSize);
-  if (isLeaf(box)) {
-    const opts = box.kind === 'empty' ? [['', '（画像か文字を選ぶ）'], ...KIND_OPTS] : KIND_OPTS;
-    el.append(row('中身', selectEl(opts, box.kind === 'empty' ? '' : box.kind, (v) => v && changeKind(box, v))));
-  }
+  if (isLeaf(box)) el.append(row('中身', selectEl(KIND_OPTS, kind, (v) => v !== kind && changeKind(box, v))));
 
   // 中身
   if (box.kind === 'image') el.append(imageFields(box, node, inh));
-  if (box.kind === 'text') el.append(textFields(box, node, inh));
+  if (kind === 'text') el.append(textFields(box, node, inh));
 
   // 枠
   const fsBox = fieldset('余白・背景・枠線');
@@ -625,7 +624,7 @@ function renderProps() {
     paddingRow(box, node),
     ...bgRows(node.background, (v) => edit(box, 'background', v)),
     row('枠線', h2(
-      numEl(node.border?.width ?? '', 'pt', (v) => edit(box, 'border', v === '' ? undefined : { width: +v, color: node.border?.color || '#333333' })),
+      numEl(node.border?.width ?? 0, '', (v) => edit(box, 'border', +v > 0 ? { width: +v, color: node.border?.color || '#333333' } : undefined)),
       'pt',
       colorEl(node.border?.color, (v) => node.border && edit(box, ['border', 'color'], v || '#333333')),
     )),
@@ -966,9 +965,9 @@ function imageFields(box, node, inh) {
   cropRow.classList.add('crop4');
   fs.append(
     row('ファイル', srcIn),
-    row('収め方', selectEl(withInherit(FIT_OPTS, inh.fit, 'contain'), node.fit ?? '', (v) => edit(box, 'fit', v || undefined))),
-    row('横の位置', selectEl(withInherit(H_OPTS, inh.align, 'center'), node.align ?? '', (v) => edit(box, 'align', v || undefined))),
-    row('縦の位置', selectEl(withInherit(V_OPTS, inh.valign, 'middle'), node.valign ?? '', (v) => edit(box, 'valign', v || undefined))),
+    row('収め方', selectEl(FIT_OPTS, node.fit ?? inh.fit ?? 'contain', (v) => edit(box, 'fit', v))),
+    row('横の位置', selectEl(H_OPTS, node.align ?? inh.align ?? 'center', (v) => edit(box, 'align', v))),
+    row('縦の位置', selectEl(V_OPTS, node.valign ?? inh.valign ?? 'middle', (v) => edit(box, 'valign', v))),
     row('トリミング', cropRow, '残す範囲の左端・上端・右端・下端を、元画像の幅・高さに対する割合（0〜1）で書く'),
   );
   const acts = h('div', 'actions');
@@ -1004,16 +1003,12 @@ function wrapWhole(text, f) {
 
 // 揃え方（横）と（縦）を 1 行に
 function alignRow(box, node, inh, hDflt, vDflt) {
-  const short = (opts, inherited, dflt) => {
-    const name = (v) => (opts.find((o) => o[0] === v) || [, v])[1];
-    return [['', inherited != null ? `${name(inherited)}（外側のボックスと同じ）` : `${name(dflt)}（指定なし）`], ...opts];
-  };
   const r = h('div', 'row-line');
   r.append(
     h('label', null, '揃え方（横）'),
-    selectEl(short(H_OPTS, inh.align, hDflt), node.align ?? '', (v) => edit(box, 'align', v || undefined)),
+    selectEl(H_OPTS, node.align ?? inh.align ?? hDflt, (v) => edit(box, 'align', v)),
     h('label', null, '揃え方（縦）'),
-    selectEl(short(V_OPTS, inh.valign, vDflt), node.valign ?? '', (v) => edit(box, 'valign', v || undefined)),
+    selectEl(V_OPTS, node.valign ?? inh.valign ?? vDflt, (v) => edit(box, 'valign', v)),
   );
   return r;
 }
@@ -1031,29 +1026,17 @@ function textFields(box, node, inh) {
       if (f.italic) pairs.push([['font', 'italic'], off]);
       editMany(box, pairs);
     })),
-    row('大きさ', h2(numEl(f.size ?? '', String(fi.size ?? 18), (v) => edit(box, ['font', 'size'], v === '' ? undefined : +v)), 'pt')),
-    row('フォント', selectEl(withInherit(FONT_OPTS, fi.family, 'Arial'), f.family ?? '', (v) => edit(box, ['font', 'family'], v || undefined))),
+    row('大きさ', h2(numEl(f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, ['font', 'size'], +v)), 'pt')),
+    row('フォント', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
     row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
     row('見出しアイコン', selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined))),
-    ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? '', String(f.size ?? fi.size ?? 18), (v) => edit(box, 'icon_size', v === '' ? undefined : +v)), 'pt'))] : []),
+    ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, 'icon_size', +v)), 'pt'))] : []),
     alignRow(box, node, inh, 'left', 'top'),
-    row('行の高さ', numEl(node.line_height ?? '', String(inh.line_height ?? 1.2), (v) => edit(box, 'line_height', v === '' ? undefined : +v), 0.05)),
+    row('行の高さ', numEl(node.line_height ?? inh.line_height ?? 1.2, '', (v) => +v > 0 && edit(box, 'line_height', +v), 0.05)),
   );
   return fs;
 }
 
-function inheritFields(box, node, inh) {
-  const fs = fieldset('中のボックスすべてに効く設定');
-  const f = node.font || {};
-  fs.append(
-    row('横の揃え方', selectEl(withInherit(H_OPTS, inh.align, '画像は中央、文字は左'), node.align ?? '', (v) => edit(box, 'align', v || undefined))),
-    row('縦の揃え方', selectEl(withInherit(V_OPTS, inh.valign, '画像は中央、文字は上'), node.valign ?? '', (v) => edit(box, 'valign', v || undefined))),
-    row('画像の収め方', selectEl(withInherit(FIT_OPTS, inh.fit, 'contain'), node.fit ?? '', (v) => edit(box, 'fit', v || undefined))),
-    row('文字の大きさ', h2(numEl(f.size ?? '', String(inh.font?.size ?? 18), (v) => edit(box, ['font', 'size'], v === '' ? undefined : +v)), 'pt')),
-    row('フォント', selectEl(withInherit(FONT_OPTS, inh.font?.family, 'Arial'), f.family ?? '', (v) => edit(box, ['font', 'family'], v || undefined))),
-  );
-  return fs;
-}
 
 // ---------------------------------------------------------------- 部品
 
@@ -1148,7 +1131,7 @@ function bgRows(cur, write) {
       const nat = S.imageSizes.get(cur.image);
       const dflt = nat ? fmt((nat.w / 96) * PER_INCH[u]) : '';
       const { tile, ...rest } = cur;
-      rows.push(row('模様の幅', h2(numEl(tile ?? '', dflt, (v) => write(v === '' ? rest : { ...cur, tile: +v })), u), '模様 1 つの幅。空けておくと、画像を 96 dpi とみなした幅になる'));
+      rows.push(row('模様の幅', h2(numEl(tile ?? dflt, '', (v) => +v > 0 && write({ ...cur, tile: +v })), u), '模様 1 つの幅'));
     }
   }
   return rows;
@@ -1159,12 +1142,9 @@ const KIND_OPTS = [['image', '画像'], ['text', '文字']];
 const FIT_OPTS = [['contain', '切らずに全体を収める'], ['cover', 'ボックスいっぱいに広げ、はみ出た部分を切る'], ['stretch', '縦横比を変えてボックスに合わせる']];
 const H_OPTS = [['left', '左'], ['center', '中央'], ['right', '右']];
 const FONT_OPTS = FONTS.map((f) => [f, f]);
+const DEFAULT_SIZE = 24; // 文字の大きさの既定（pt）
 const V_OPTS = [['top', '上'], ['middle', '中央'], ['bottom', '下']];
 
-function withInherit(opts, inherited, dflt) {
-  const label = inherited != null ? `（外側のボックスの設定：${(opts.find((o) => o[0] === inherited) || [, inherited])[1]}）` : `（指定なし：${(opts.find((o) => o[0] === dflt) || [, dflt])[1]}）`;
-  return [['', label], ...opts];
-}
 
 function h(tag, cls, text) {
   const e = document.createElement(tag);
@@ -1392,14 +1372,16 @@ function openSplitDialog() {
   const box = S.selected ? findBox(S.selected) : null;
   if (!box || !box.src) return;
   const dlg = $('#split-dialog');
-  dlg.returnValue = '';
-  dlg.onclose = () => {
+  // ボタンを押したその場で分割する（close の知らせは、画面が隠れていると遅れることがある）
+  const run = (dir) => {
     const n = Math.max(2, Math.min(12, parseInt($('#split-n').value, 10) || 2));
-    if (dlg.returnValue === 'rows' || dlg.returnValue === 'cols') {
-      setSel([]);
-      splitBox(box, dlg.returnValue, n);
-    }
+    dlg.close();
+    setSel([]);
+    splitBox(box, dir, n);
   };
+  $('#split-rows').onclick = () => run('rows');
+  $('#split-cols').onclick = () => run('cols');
+  $('#split-cancel').onclick = () => dlg.close();
   dlg.showModal();
 }
 

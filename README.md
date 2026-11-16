@@ -64,7 +64,7 @@ node bin/slide.js export my-poster                     # PPTX と PDF（--pptx /
 ```yaml
 canvas: {width: 32, height: 18, unit: cm}   # 1枚の大きさ。unit は cm / mm / in / pt / px
 defaults:                                          # 全体の既定（下の「引き継ぐ設定」）
-  font: {size: 18, family: Arial}
+  font: {size: 24, family: Helvetica}
 check: {min_dpi: 150}                              # これ未満の画像を警告
 templates: {...}                                   # この文書の中だけで使う型（templates/ フォルダと同じ形）
 
@@ -138,7 +138,7 @@ slides:
 
 - PPTX を PowerPoint で手直ししても、`layout.yaml` には戻らない。正本は常に設定ファイル
 - 文字の折り返しとはみ出しの判定は Chrome で測る。PowerPoint とはフォントの寸法が少し違うため、ぎりぎりの枠では PPTX 側だけはみ出すことがある
-- 既定フォントは Arial。和文は、PDF では Hiragino 等、PPTX では Office テーマの東アジアフォントで表示されるので、字形が一致しない。合わせたいときは `font.family` に両方にあるフォントを書く
+- 既定フォントは Helvetica（Windows の PowerPoint では Arial などに置き換わることがある）。和文は、PDF では Hiragino 等、PPTX では Office テーマの東アジアフォントで表示されるので、字形が一致しない。合わせたいときは `font.family` に両方にあるフォントを書く
 - EXIF の回転情報付きの写真は、縦横を入れ替えて計算するが、PPTX での表示は未確認
 - 図形・矢印・表・箇条書きの書式（字下げ）は未対応
 - PPTX の「画像を並べる」背景は、画像を 96 dpi とみなして並べる倍率を決めている。PowerPoint で開いた見え方は未確認

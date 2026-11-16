@@ -238,7 +238,7 @@ function layoutText(node, rect, style, path, ctx) {
   const align = style.align || 'left';
   const valign = style.valign || 'top';
   checkAlign(align, valign, path, ctx);
-  const font = { size: 18, ...(style.font || {}) };
+  const font = { size: 24, ...(style.font || {}) };
   const lineHeight = style.line_height ?? 1.2;
   let textRect = rect;
   // 見出しアイコン：icon（画像のファイル）、icon_size（高さ。pt。省くと文字の大きさ）
