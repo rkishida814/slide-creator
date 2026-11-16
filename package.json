@@ -4,7 +4,9 @@
   "description": "決まった型で図と文字を置いていくスライド・ポスター作成ツール（設定ファイルが正本）",
   "main": "src/core/layout.js",
   "scripts": {
-    "demo": "node examples/make-assets.js && node bin/slide.js check examples/demo && node bin/slide.js export examples/demo"
+    "demo": "node examples/make-assets.js && node bin/slide.js check examples/demo && node bin/slide.js export examples/demo",
+    "vendor": "cp node_modules/pptxgenjs/dist/pptxgen.bundle.js web/vendor/ && rm -rf web/vendor/yaml && cp -R node_modules/yaml/browser/dist web/vendor/yaml",
+    "serve": "python3 scripts/serve.py 8769"
   },
   "author": "",
   "license": "UNLICENSED",

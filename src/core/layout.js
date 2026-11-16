@@ -35,7 +35,7 @@ export function layoutDoc(doc, env) {
     const ctx = { unit, minDpi, env, boxes: [], elements: [], issues: [], ids: new Set(), slideId: id };
     const inh = pickInherit(doc.defaults || {}, {});
     if (slide.background) ctx.elements.push({ type: 'rect', path: id, rect: { x: 0, y: 0, w: W, h: H }, fill: slide.background });
-    walk(slide.root, { x: 0, y: 0, w: W, h: H }, inh, `${id}`, ctx, 0);
+    walk(slide.root, { x: 0, y: 0, w: W, h: H }, inh, `${id}`, ctx, 0, null);
     return { id, rect: { x: 0, y: 0, w: W, h: H }, boxes: ctx.boxes, elements: ctx.elements, issues: ctx.issues };
   });
   const ids = slides.map((s) => s.id);
@@ -53,7 +53,7 @@ function pickInherit(node, base) {
   return out;
 }
 
-function walk(node, rect, inherited, autoPath, ctx, depth) {
+function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
   const kind = nodeKind(node);
   if (typeof node === 'string') node = { text: node };
   node = node || {};
@@ -62,9 +62,12 @@ function walk(node, rect, inherited, autoPath, ctx, depth) {
     if (ctx.ids.has(node.id)) ctx.issues.push({ level: 'error', path, msg: `id "${node.id}" が同じスライド内で重複` });
     ctx.ids.add(node.id);
   }
-  ctx.boxes.push({ path, id: node.id || null, kind, rect, depth });
+  const box = { path, id: node.id || null, kind, rect, depth, parent, src: node.__src || null, template: node.__template || null };
+  ctx.boxes.push(box);
 
   const style = pickInherit(node, inherited);
+  // 画面の設定欄で使う（JSON には出さない）
+  Object.defineProperties(box, { node: { value: node }, inherited: { value: inherited }, style: { value: style } });
   if (node.background || node.border) {
     ctx.elements.push({ type: 'rect', path, rect, fill: node.background || null, border: node.border || null });
   }
@@ -108,7 +111,7 @@ function layoutSplit(node, rect, style, path, ctx, depth) {
   children.forEach((child, i) => {
     const len = fixed[i] != null ? fixed[i] : sumRatio > 0 ? (Math.max(free, 0) * ratio[i]) / sumRatio : 0;
     const r = dir === 'rows' ? { x: rect.x, y: pos, w: rect.w, h: len } : { x: pos, y: rect.y, w: len, h: rect.h };
-    walk(child, r, style, `${path}.${i}`, ctx, depth + 1);
+    walk(child, r, style, `${path}.${i}`, ctx, depth + 1, path);
     pos += len + gap;
   });
 }
@@ -131,7 +134,7 @@ function layoutGrid(node, rect, style, path, ctx, depth) {
     const r = byCol ? k % rows : Math.floor(k / cols);
     const c = byCol ? Math.floor(k / rows) : k % cols;
     const cell = { x: rect.x + c * (cw + cg), y: rect.y + r * (ch + rg), w: cw, h: ch };
-    walk(items[k], cell, style, `${path}.${k}`, ctx, depth + 1);
+    walk(items[k], cell, style, `${path}.${k}`, ctx, depth + 1, path);
   }
 }
 

@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>slide-creator</title>
+<link rel="stylesheet" href="style.css">
+<script src="vendor/pptxgen.bundle.js"></script>
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<header>
+  <strong class="brand">slide-creator</strong>
+  <button id="btn-open" title="手元のプロジェクトフォルダを開く">フォルダを開く</button>
+  <button id="btn-reopen" hidden></button>
+  <button id="btn-demo">見本</button>
+  <span class="sep"></span>
+  <button id="btn-save" disabled title="⌘S">保存</button>
+  <button id="btn-reload" disabled title="ファイルを読み直す">読み直す</button>
+  <span class="sep"></span>
+  <button id="btn-pptx" disabled>PPTX</button>
+  <button id="btn-pdf" disabled title="印刷画面で「PDFに保存」を選ぶ">PDF</button>
+  <span class="sep"></span>
+  <label class="chk"><input type="checkbox" id="chk-outline" checked> 枠を表示</label>
+  <span id="project-name"></span>
+  <span id="status"></span>
+</header>
+<main>
+  <aside>
+    <nav class="tabs">
+      <button data-tab="props" class="on">設定</button>
+      <button data-tab="yaml">YAML</button>
+      <button data-tab="issues">問題 <span id="issue-count"></span></button>
+      <button data-tab="help">使い方</button>
+    </nav>
+    <section id="tab-props" class="tab on"></section>
+    <section id="tab-yaml" class="tab">
+      <div class="yaml-head"><select id="yaml-file"></select><span id="yaml-error"></span></div>
+      <textarea id="yaml-text" spellcheck="false"></textarea>
+    </section>
+    <section id="tab-issues" class="tab"></section>
+    <section id="tab-help" class="tab help">
+      <h3>操作</h3>
+      <ul>
+        <li>クリック：枠を選ぶ（いちばん内側の枠）</li>
+        <li>ダブルクリック / Enter：選んだ枠を拡大して表示</li>
+        <li>Esc：親の枠を選ぶ</li>
+        <li>⌘S / Ctrl+S：保存</li>
+      </ul>
+      <h3>考え方</h3>
+      <p>正本はプロジェクトフォルダの <code>layout.yaml</code>。左の「設定」で変えた内容は、その YAML に書き込まれる（「YAML」タブで直接書き換えてもよい）。保存するまでファイルは変わらない。</p>
+      <p>テンプレート（型）の中のノードは、id があればそのスライドの <code>fill</code> に書き込み、id が無ければ型の定義そのものを書き換える（型を使う全ての箇所に効く）。</p>
+      <p>書き方の詳細はリポジトリの README を参照。</p>
+    </section>
+  </aside>
+  <div class="stage">
+    <div class="bar">
+      <div id="slide-tabs"></div>
+      <div id="crumbs"></div>
+      <div class="zoom">
+        <button id="btn-focus" disabled title="Enter">選んだ枠を拡大</button>
+        <button id="btn-whole" disabled>全体</button>
+      </div>
+    </div>
+    <div class="frame-wrap">
+      <iframe id="frame" title="プレビュー"></iframe>
+      <div id="empty" class="empty">
+        <p>「フォルダを開く」で、<code>layout.yaml</code> のあるプロジェクトフォルダを選んでください。</p>
+        <p>「見本」で、見本のプロジェクトを開けます（読むだけ）。</p>
+      </div>
+    </div>
+  </div>
+</main>
+<dialog id="crop-dialog">
+  <form method="dialog">
+    <h3>トリミング <small id="crop-src"></small></h3>
+    <div id="crop-area"><img id="crop-img" alt=""><div id="crop-rect"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div>
+    <div class="crop-tools">
+      <label class="chk"><input type="checkbox" id="crop-lock"> 枠の縦横比に合わせる</label>
+      <span id="crop-values"></span>
+    </div>
+    <div class="crop-buttons">
+      <button value="clear" id="crop-clear">トリミングを外す</button>
+      <span class="sep"></span>
+      <button value="cancel">取り消す</button>
+      <button value="ok" class="primary">適用</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
