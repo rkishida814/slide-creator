@@ -25,6 +25,11 @@ export function renderHTML(layout, opts = {}) {
   const L = (v) => `${+v.toFixed(4)}${u}`;
   const slides = opts.slides ? layout.slides.filter((s) => opts.slides.includes(s.id)) : layout.slides;
   const labelSize = layout.width / 90;
+  // Noto Sans JP を使う文字があるときだけ、描画を止めない形で読み込む（つながらなくても他の書体で描く）
+  const usesNoto = slides.some((sl) => sl.elements.some((e) => e.type === 'text' && e.font?.family === 'Noto Sans JP'));
+  const fontLink = usesNoto
+    ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" media="print" onload="this.media=\'all\'">\n'
+    : '';
 
   const body = slides
     .map((s) => {
@@ -44,8 +49,7 @@ export function renderHTML(layout, opts = {}) {
 
   return `<!doctype html>
 <html><head><meta charset="utf-8">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap">
-<style>
+${fontLink}<style>
 @page { size: ${L(layout.width)} ${L(layout.height)}; margin: 0; }
 html, body { margin: 0; padding: 0; background: #fff; }
 .slide { position: relative; overflow: hidden; background: #fff; break-after: page; }

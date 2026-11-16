@@ -115,3 +115,16 @@ legend { color: var(--muted); padding: 0 4px; }
 #global summary h2 { margin: 0; }
 #global .sum-size { color: var(--muted); font-size: 14px; }
 #global details[open] summary { margin-bottom: 6px; }
+
+/* 飾りの付けられる文字の欄 */
+.rich-wrap { width: 100%; }
+.rich-bar { display: flex; gap: 4px; margin-bottom: 4px; }
+.rich-btn { padding: 2px 9px; min-width: 34px; font-family: 'Times New Roman', serif; }
+.rich-bold { font-weight: 700; }
+.rich-italic { font-style: italic; }
+.rich {
+  min-height: 5.5em; border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; background: #fff;
+  white-space: pre-wrap; overflow-wrap: anywhere; outline: none;
+}
+.rich:focus { border-color: var(--accent); }
+/* ドラッグで入れ替える先 */
