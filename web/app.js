@@ -649,7 +649,12 @@ function paddingRow(box, node) {
     });
     wrap.append(ic, inp);
   });
-  return row('内側の余白', wrap);
+  const r = row('余白', wrap);
+  const inset = checkEl('背景ごと余白を設ける', !!node.background_inset, (x) => edit(box, 'background_inset', x || undefined));
+  const r2 = row('', inset);
+  const both = h('div');
+  both.append(r, r2);
+  return both;
 }
 
 // 複数のボックスを選んだとき。共通の外側の分割について、選んだ部分どうしの比率と、まとめた背景を設定する

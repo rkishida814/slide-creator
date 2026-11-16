@@ -75,10 +75,12 @@ function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
   const style = pickInherit(node, inherited);
   // 画面の設定欄で使う（JSON には出さない）
   Object.defineProperties(box, { node: { value: node }, inherited: { value: inherited }, style: { value: style } });
-  pushBackground(node.background, rect, path, ctx);
-  if (node.border) ctx.elements.push({ type: 'rect', path, rect, fill: null, border: node.border });
   const pad = parseBox(node.padding, ctx.unit);
   const inner = { x: rect.x + pad.l, y: rect.y + pad.t, w: rect.w - pad.l - pad.r, h: rect.h - pad.t - pad.b };
+  // background_inset: true なら、背景と枠線も余白の分だけ内側に縮める
+  const bgRect = node.background_inset && inner.w > 0 && inner.h > 0 ? inner : rect;
+  pushBackground(node.background, bgRect, path, ctx);
+  if (node.border) ctx.elements.push({ type: 'rect', path, rect: bgRect, fill: null, border: node.border });
   if (inner.w <= 0 || inner.h <= 0) {
     ctx.issues.push({ level: 'error', path, msg: 'padding が大きすぎて中身の領域が無い' });
     return;
