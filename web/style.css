@@ -159,3 +159,17 @@ legend { color: var(--muted); padding: 0 4px; }
 .ratio-sep { margin: 0 2px; }
 /* 枠（fieldset）の外の行も、枠の中の行と入力の左端を揃える */
 #node > .row, #global .row { padding: 0 11px; }
+
+/* テキストの欄の改行の印 */
+.rich > div::after { content: '¶'; color: #b6bcc6; margin-left: 2px; }
+.rich > div > br:only-child { display: none; }
+.rich .sb { color: #b6bcc6; user-select: none; }
+.rich-legend { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+/* 操作の結果（プレビューの上） */
+.toast { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 20; background: #1f2937; color: #fff;
+  padding: 8px 16px; border-radius: 8px; font-size: 15px; box-shadow: 0 6px 20px rgba(0,0,0,.25); max-width: 90%; }
+.toast.err { background: #b91c1c; }
+.toast[hidden] { display: none; }
+/* 幅と高さの行 */
+.row .row-line input[type=number] { width: 4.6em; }

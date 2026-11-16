@@ -4,7 +4,7 @@
 import { assertUnit, toUnit, parseBox } from './units.js';
 
 // 親から子へ引き継ぐ設定
-const INHERIT = ['align', 'valign', 'fit', 'font', 'line_height'];
+const INHERIT = ['align', 'valign', 'fit', 'font', 'line_height', 'para_space'];
 const H_ALIGN = ['left', 'center', 'right'];
 const V_ALIGN = ['top', 'middle', 'bottom'];
 const FITS = ['contain', 'cover', 'stretch'];
@@ -273,6 +273,7 @@ function layoutText(node, rect, style, path, ctx) {
     align,
     valign,
     line_height: lineHeight,
+    para_space: style.para_space ?? 0,
   });
 }
 

@@ -2,7 +2,7 @@
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, FONTS, DEFAULT_FONT } from '../src/core/html.js';
-import { richToHTML } from '../src/core/richtext.js';
+import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
@@ -42,6 +42,10 @@ async function openSource(source) {
     }
     S.source = source;
     S.files = files;
+    S.saved = Object.fromEntries(Object.entries(files).map(([k, f]) => [k, f.text]));
+    S.hist = [];
+    S.histI = -1;
+    pushHistory();
     S.assets = (await source.list('')).filter((f) => IMAGE_RE.test(f) && !f.startsWith('out/'));
     S.imageSizes.clear();
     S.imageURLs.clear();
@@ -428,8 +432,39 @@ function measureOverflow(doc) {
 function fileChanged(file) {
   const f = S.files[file];
   f.text = stringify(f.doc);
-  f.dirty = true;
+  f.dirty = f.text !== S.saved?.[file];
+  pushHistory();
   return rebuild();
+}
+
+// 書き換えるたびに、全てのファイルの中身を記録する（⌘Z で戻り、⌘⇧Z でやり直す）
+function snapshot() {
+  return Object.fromEntries(Object.entries(S.files).map(([k, f]) => [k, f.text]));
+}
+
+function pushHistory() {
+  S.hist = (S.hist || []).slice(0, (S.histI ?? -1) + 1);
+  S.hist.push(snapshot());
+  if (S.hist.length > 300) S.hist.shift();
+  S.histI = S.hist.length - 1;
+}
+
+function restoreHistory(i) {
+  const snap = S.hist[i];
+  S.histI = i;
+  for (const [k, text] of Object.entries(snap)) S.files[k] = { text, doc: parse(text), dirty: text !== S.saved?.[k] };
+  S.keepPanel = null;
+  return rebuild();
+}
+
+function undo() {
+  if (!S.hist || S.histI <= 0) return status('これ以上は戻せません');
+  restoreHistory(S.histI - 1).then(() => status('元に戻しました'));
+}
+
+function redo() {
+  if (!S.hist || S.histI >= S.hist.length - 1) return status('これ以上はやり直せません');
+  restoreHistory(S.histI + 1).then(() => status('やり直しました'));
 }
 
 // 選んだ枠の設定を 1 つ変える
@@ -621,7 +656,7 @@ function renderProps() {
   // 種類
   const fsSize = sizeFields(box);
   if (fsSize) el.append(fsSize);
-  if (isLeaf(box)) el.append(row('中身', selectEl(KIND_OPTS, kind, (v) => v !== kind && changeKind(box, v))));
+  if (isLeaf(box)) el.append(row('内容', selectEl(KIND_OPTS, kind, (v) => v !== kind && changeKind(box, v))));
 
   // 中身
   if (box.kind === 'image') el.append(imageFields(box, node, inh));
@@ -992,51 +1027,60 @@ function renderGlobal() {
   for (const i of S.layout.issues || []) el.append(h('p', 'warn', i.msg));
 }
 
-// 分割の中の枠の大きさ。外側の分割の ratio のうち、この枠の分を書き換える。
-// 数値は比率、"3cm" のような単位付きは固定の長さ（ほかの部分は残りを比率で分ける）
-function sizeFields(box) {
-  const parent = box.parent ? findBox(box.parent) : null;
-  if (!parent || parent.kind !== 'split' || !parent.src) return null;
-  const pn = parent.node || {};
-  const n = (pn.children || []).length;
-  const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
-  const i = sibs.findIndex((b) => b.path === box.path);
-  if (i < 0 || sibs.length !== n) return null;
-  const u = S.layout.unit;
-  const ratio = Array.isArray(pn.ratio) && pn.ratio.length === n ? [...pn.ratio] : Array(n).fill(1);
-  const isLen = (v) => typeof v === 'string';
-  const rows = pn.split === 'rows';
-  const dim = rows ? '高さ' : '幅';
-  const lenOf = (b) => (rows ? b.rect.h : b.rect.w);
-  const r3 = (v) => Math.round(v * 1000) / 1000;
-  const write = (v) => {
-    ratio[i] = v;
-    edit(parent, 'ratio', ratio);
-  };
-
-  const fs = fieldset('このボックスの大きさ');
-  const mode = selectEl([['ratio', '比率で指定'], ['len', '長さで指定']], isLen(ratio[i]) ? 'len' : 'ratio', (v) => {
-    if (v === 'len') return write(`${r3(lenOf(box))}${u}`);
-    // 比率に戻すときは、今の大きさを保つ比にする（比率で決めているほかの部分を基準にする）
-    const j = sibs.findIndex((b, k) => k !== i && !isLen(ratio[k]) && ratio[k] > 0);
-    write(j >= 0 ? r3((lenOf(box) / lenOf(sibs[j])) * ratio[j]) : 1);
-  });
-  let valueIn;
-  let hint;
-  if (isLen(ratio[i])) {
-    valueIn = h2(numEl(r3(toUnit(ratio[i], u)), '', (v) => +v > 0 && write(`${+v}${u}`)), u);
-    hint = `${u} で固定する。ほかの部分は、残りの長さを比率で分ける`;
-  } else {
-    valueIn = numEl(ratio[i], '1', (v) => +v > 0 && write(+v));
-    const shown = ratio.map((v) => (isLen(v) ? v : String(v))).join(' : ');
-    hint = `ほかの部分との比。今は ${shown}`;
+// そのボックスの幅（左右に分ける分割）・高さ（上下に分ける分割）を決めている分割と、その中の何番目か
+function sizeCtrl(box, dir) {
+  for (let b = box; b && b.parent; b = findBox(b.parent)) {
+    const p = findBox(b.parent);
+    if (p && p.kind === 'split' && p.node?.split === dir && p.src) {
+      const kids = curSlide().boxes.filter((x) => x.parent === p.path);
+      const i = kids.findIndex((x) => x.path === b.path);
+      if (i >= 0 && kids.length === (p.node.children || []).length) return { p, kids, i, child: b };
+    }
   }
-  if (parent.src.mode === 'shared') fs.append(h('p', 'warn', 'この大きさは、同じテンプレートを使う全てのスライドで共通です。'));
-  fs.append(
-    row(`${dim}の指定`, mode),
-    row(dim, valueIn, hint),
-    h('div', 'note', `今の${dim} ${fmt(lenOf(box))} ${u}`),
-  );
+  return null;
+}
+
+// ボックスの大きさ。長さで指定すると、その長さに固定する（同じ並びのほかの部分は、残りを比率で分ける）
+function sizeFields(box) {
+  const u = S.layout.unit;
+  const mode = S.sizeMode || 'len';
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const fs = fieldset('ボックスの大きさ');
+  fs.append(row('サイズの指定', selectEl([['len', '長さで指定'], ['ratio', '比率で指定']], mode, (v) => {
+    S.sizeMode = v;
+    renderProps();
+  })));
+  let shared = false;
+  const dimInput = (dir) => {
+    const lenOf = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
+    const c = sizeCtrl(box, dir);
+    if (!c) {
+      // 外側で分けられていない向きは、値を出すだけ
+      const i = numEl(r3(lenOf(box)), '', () => {});
+      i.disabled = true;
+      return i;
+    }
+    if (c.p.src.mode === 'shared') shared = true;
+    const n = c.kids.length;
+    const ratio = Array.isArray(c.p.node.ratio) && c.p.node.ratio.length === n ? [...c.p.node.ratio] : Array(n).fill(1);
+    const write = (v) => {
+      ratio[c.i] = v;
+      edit(c.p, 'ratio', ratio);
+    };
+    if (mode === 'len') return numEl(r3(lenOf(c.child)), '', (v) => +v > 0 && write(`${+v}${u}`));
+    let val = ratio[c.i];
+    if (typeof val === 'string') {
+      // 長さで決めている部分を比率で表すときは、比率で決めているほかの部分を基準にする
+      const j = c.kids.findIndex((k, ix) => ix !== c.i && typeof ratio[ix] === 'number' && ratio[ix] > 0);
+      val = j >= 0 ? r3((lenOf(c.child) / lenOf(c.kids[j])) * ratio[j]) : 1;
+    }
+    return numEl(val, '', (v) => +v > 0 && write(+v));
+  };
+  const unitTxt = mode === 'len' ? u : '';
+  const line = h('span', 'in row-line');
+  line.append(dimInput('cols'), unitTxt, h('label', null, '高さ'), dimInput('rows'), unitTxt);
+  fs.append(row('幅', line));
+  if (shared) fs.append(h('p', 'warn', 'この大きさは、同じテンプレートを使う全てのスライドで共通です。'));
   return fs;
 }
 
@@ -1074,7 +1118,7 @@ function gridFields(box, node) {
 }
 
 function imageFields(box, node, inh) {
-  const fs = fieldset('画像');
+  const fs = fieldset(null);
   const opts = [...new Set([...S.assets, String(node.image)])].map((a) => [a, a]);
   const srcIn = S.assets.length
     ? selectEl(opts, String(node.image), (v) => edit(box, 'image', v))
@@ -1091,7 +1135,7 @@ function imageFields(box, node, inh) {
   const cropRow = h2(...cropIns);
   cropRow.classList.add('crop4');
   fs.append(
-    row('ファイル', srcIn),
+    row('画像', srcIn),
     row('収め方', selectEl(FIT_OPTS, node.fit ?? inh.fit ?? 'contain', (v) => edit(box, 'fit', v))),
     row('横の位置', selectEl(H_OPTS, node.align ?? inh.align ?? 'center', (v) => edit(box, 'align', v))),
     row('縦の位置', selectEl(V_OPTS, node.valign ?? inh.valign ?? 'middle', (v) => edit(box, 'valign', v))),
@@ -1141,11 +1185,11 @@ function alignRow(box, node, inh, hDflt, vDflt) {
 }
 
 function textFields(box, node, inh) {
-  const fs = fieldset('文字');
+  const fs = fieldset(null);
   const f = node.font || {};
   const fi = inh.font || {};
   fs.append(
-    row('文字', richEditor(wrapWhole(String(node.text ?? ''), f), (v) => {
+    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), (v) => {
       S.keepPanel = box.path;
       const off = box.src.mode === 'direct' ? undefined : false;
       const pairs = [['text', v]];
@@ -1160,6 +1204,7 @@ function textFields(box, node, inh) {
     ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, 'icon_size', +v)), 'pt'))] : []),
     alignRow(box, node, inh, 'left', 'top'),
     row('行間', h2(numEl(node.line_height ?? inh.line_height ?? 1.2, '', (v) => +v > 0 && edit(box, 'line_height', +v), 0.05), '倍')),
+    row('段落の間隔', h2(numEl(node.para_space ?? inh.para_space ?? 0, '', (v) => edit(box, 'para_space', +v > 0 ? +v : undefined)), 'pt')),
   );
   return fs;
 }
@@ -1167,15 +1212,23 @@ function textFields(box, node, inh) {
 
 // ---------------------------------------------------------------- 部品
 
-// 文字の欄。ドラッグで選んだ範囲を、ボタンで太字・斜体・上付き・下付きにする。
-// 中身は <b> <i> <sup> <sub> の付いた文字として layout.yaml に書く
+// テキストの欄。ドラッグで選んだ範囲を、ボタンで太字・斜体・上付き・下付きにする。
+// Enter は段落の区切り（行末に ¶）、Shift+Enter は段落の中の改行（↵）。
+// layout.yaml には、段落の区切りを改行、段落の中の改行を <br> として書く
+const SOFT_BREAK = '<span class="sb" contenteditable="false">↵</span><br>';
+function editorHTML(value) {
+  return paragraphs(value)
+    .map((p) => `<div>${richToHTML(p, SOFT_BREAK) || '<br>'}</div>`)
+    .join('');
+}
+
 function richEditor(value, onCommit) {
   const wrap = h('div', 'rich-wrap');
   const bar = h('div', 'rich-bar');
   const ed = document.createElement('div');
   ed.className = 'rich';
   ed.contentEditable = 'true';
-  ed.innerHTML = richToHTML(value);
+  ed.innerHTML = editorHTML(value);
   let last = value;
   let timer = null;
   const commit = () => {
@@ -1191,13 +1244,52 @@ function richEditor(value, onCommit) {
     b.type = 'button';
     b.title = title;
     b.onmousedown = (e) => {
-      e.preventDefault(); // 文字の欄の選択を保つ
+      e.preventDefault(); // テキストの欄の選択を保つ
       document.execCommand('styleWithCSS', false, false);
       document.execCommand(cmd);
       commit();
     };
     bar.append(b);
   }
+  ed.onfocus = () => document.execCommand('defaultParagraphSeparator', false, 'div');
+  // Shift+Enter：カーソルのある段落の中に ↵ と改行を差し込み、カーソルをその直後に置く
+  const insertSoftBreak = () => {
+    const sel = getSelection();
+    if (!sel.rangeCount) return;
+    let r = sel.getRangeAt(0);
+    r.deleteContents();
+    if (r.startContainer === ed) {
+      // カーソルが段落の外にあるときは、直前の段落の末尾に移す
+      const div = ed.children[Math.max(0, r.startOffset - 1)] || ed.firstElementChild;
+      if (!div) return;
+      r = document.createRange();
+      r.selectNodeContents(div);
+      r.collapse(false);
+      const last = div.lastChild;
+      if (last && last.nodeName === 'BR' && !afterMark(last)) r.setStartBefore(last);
+    }
+    const sb = document.createElement('span');
+    sb.className = 'sb';
+    sb.contentEditable = 'false';
+    sb.textContent = '↵';
+    const br = document.createElement('br');
+    const z = document.createTextNode('\u200b'); // 行末の改行を見えるようにするゼロ幅の文字（書き出すときに外す）
+    r.insertNode(z);
+    r.insertNode(br);
+    r.insertNode(sb);
+    const nr = document.createRange();
+    nr.setStart(z, 1);
+    nr.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(nr);
+    ed.dispatchEvent(new Event('input'));
+  };
+  ed.onkeydown = (e) => {
+    if (e.key === 'Enter' && e.shiftKey) {
+      e.preventDefault();
+      insertSoftBreak();
+    }
+  };
   ed.oninput = () => {
     clearTimeout(timer);
     timer = setTimeout(commit, 600);
@@ -1207,29 +1299,51 @@ function richEditor(value, onCommit) {
     e.preventDefault();
     document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
   };
-  wrap.append(bar, ed);
+  wrap.append(bar, ed, h('div', 'rich-legend', '¶ 段落の区切り（Enter）　↵ 段落の中の改行（Shift+Enter）'));
   return wrap;
 }
 
+// その <br> が ↵ の直後にあるか（間の空の文字の節は読み飛ばす）
+function afterMark(br) {
+  let p = br.previousSibling;
+  while (p && p.nodeType === 3 && !p.nodeValue.replace(/\u200b/g, '')) p = p.previousSibling;
+  return !!p?.classList?.contains('sb');
+}
+
 function serializeRich(root) {
-  let out = '';
   const TAGS = { B: 'b', STRONG: 'b', I: 'i', EM: 'i', SUP: 'sup', SUB: 'sub' };
-  const walk = (n) => {
+  const inline = (n) => {
+    let out = '';
     for (const c of n.childNodes) {
-      if (c.nodeType === 3) out += c.nodeValue.replace(/ /g, ' ');
-      else if (c.nodeName === 'BR') out += '\n';
+      if (c.nodeType === 3) out += c.nodeValue.replace(/ /g, ' ').replace(/​/g, '');
       else if (c.nodeType === 1) {
-        const block = c.nodeName === 'DIV' || c.nodeName === 'P';
-        if (block && out && !out.endsWith('\n')) out += '\n';
+        if (c.classList?.contains('sb')) continue;
+        if (c.nodeName === 'BR') {
+          // ↵ の直後の <br> だけが段落の中の改行。ほかの <br> は空の行を保つための置き物
+          if (afterMark(c)) out += '<br>';
+          continue;
+        }
         const t = TAGS[c.nodeName];
         if (t) out += `<${t}>`;
-        walk(c);
+        out += inline(c);
         if (t) out += `</${t}>`;
       }
     }
+    return out;
   };
-  walk(root);
-  return out.replace(/<(b|i|sup|sub)><\/\1>/g, '').replace(/\n$/, '');
+  const paras = [];
+  let pending = null;
+  for (const c of root.childNodes) {
+    if (c.nodeType === 1 && (c.nodeName === 'DIV' || c.nodeName === 'P')) {
+      if (pending !== null) paras.push(pending);
+      pending = null;
+      paras.push(inline(c));
+    } else {
+      pending = (pending ?? '') + inline({ childNodes: [c] });
+    }
+  }
+  if (pending !== null) paras.push(pending);
+  return paras.join('\n').replace(/<(b|i|sup|sub)><\/\1>/g, '');
 }
 
 // 背景の欄。値は "#RRGGBB"（色）か { image, mode: tile | cover, tile, color }
@@ -1264,8 +1378,8 @@ function bgRows(cur, write) {
   return rows;
 }
 
-const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: '文字' };
-const KIND_OPTS = [['image', '画像'], ['text', '文字']];
+const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト' };
+const KIND_OPTS = [['text', 'テキスト'], ['image', '画像']];
 const FIT_OPTS = [['contain', '切らずに全体を収める'], ['cover', 'ボックスいっぱいに広げ、はみ出た部分を切る'], ['stretch', '縦横比を変えてボックスに合わせる']];
 const H_OPTS = [['left', '左'], ['center', '中央'], ['right', '右']];
 const FONT_OPTS = FONTS.map((f) => [f, f]);
@@ -1286,7 +1400,7 @@ function h2(...parts) {
 }
 function fieldset(title) {
   const f = h('fieldset');
-  f.append(h('legend', null, title));
+  if (title) f.append(h('legend', null, title));
   return f;
 }
 function row(label, input, hint) {
@@ -1384,6 +1498,7 @@ async function save() {
     for (const [name, f] of dirty) {
       await S.source.writeFile(name, f.text);
       f.dirty = false;
+      S.saved = { ...(S.saved || {}), [name]: f.text };
     }
     $('#btn-save').disabled = true;
     status(S.source.writable ? '保存しました' : '見本はフォルダに保存できないため、ファイルをダウンロードしました');
@@ -1477,26 +1592,49 @@ async function initReopen() {
 // ---------------------------------------------------------------- 全体
 
 function status(msg, isErr = false) {
-  const s = $('#status');
-  s.textContent = msg;
-  s.className = isErr ? 'err' : '';
+  const st = $('#status');
+  st.textContent = msg;
+  st.className = isErr ? 'err' : '';
+  // プレビューの上にも、少しのあいだ目立つ形で出す
+  const t = $('#toast');
+  if (!t) return;
+  clearTimeout(status.timer);
+  if (!msg || msg === '読み込み中…') {
+    t.hidden = true;
+    return;
+  }
+  t.textContent = msg;
+  t.className = isErr ? 'toast err' : 'toast';
+  t.hidden = false;
+  status.timer = setTimeout(() => (t.hidden = true), isErr ? 5000 : 2200);
 }
 
 
 function onKey(e) {
-  if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+  if ((e.metaKey || e.ctrlKey) && e.code === 'KeyS') {
     e.preventDefault();
     save();
     return;
   }
   const tag = (e.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
-  if ((e.metaKey || e.ctrlKey) && e.key === 'c' && (S.sel || []).length) {
+  const mod = e.metaKey || e.ctrlKey;
+  if (mod && (e.code === 'KeyZ' || e.code === 'KeyY')) {
+    e.preventDefault();
+    if (e.shiftKey || e.code === 'KeyY') redo();
+    else undo();
+    return;
+  }
+  if (mod && e.code === 'KeyC' && (S.sel || []).length) {
     e.preventDefault();
     copySelection();
     return;
   }
-  if ((e.metaKey || e.ctrlKey) && e.key === 'v' && S.clip && (S.sel || []).length) {
+  if (mod && e.code === 'KeyV' && (S.sel || []).length) {
+    if (!S.clip) {
+      e.preventDefault();
+      return status('先にコピーしてください（ボックスを選んで ⌘C）', true);
+    }
     e.preventDefault();
     pasteSelection();
     return;

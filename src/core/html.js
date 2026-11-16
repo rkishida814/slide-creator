@@ -1,5 +1,5 @@
 // 配置結果 → HTML。PDF/PNG 出力（Chrome）とブラウザ版の表示で共用する。
-import { richToHTML } from './richtext.js';
+import { richToHTML, paragraphs } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
 // PPTX と同じ既定フォント（Helvetica）。和文は PowerPoint 側では Office テーマの東アジアフォントになる
@@ -105,7 +105,10 @@ function renderElement(e, L, opts) {
       `color:${color(f.color, '#000000')}`,
       `line-height:${e.line_height}`,
     ].join(';');
-    return `<div ${data} class="txt" style="${st}"><div>${richToHTML(e.text)}</div></div>`;
+    const paras = paragraphs(e.text)
+      .map((p, i) => `<div class="pa"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${richToHTML(p) || '<br>'}</div>`)
+      .join('');
+    return `<div ${data} class="txt" style="${st}"><div>${paras}</div></div>`;
   }
   return '';
 }

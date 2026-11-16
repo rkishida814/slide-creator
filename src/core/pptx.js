@@ -4,7 +4,7 @@
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
 import { DEFAULT_FONT } from './html.js';
-import { parseRich, hasRich } from './richtext.js';
+import { parseRich, hasRich, paragraphs } from './richtext.js';
 
 const hex = (c, fb) => {
   if (!c) return fb;
@@ -59,7 +59,7 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
         slide.addImage({ ...(await imageRef(e.src)), ...box, objectName: `sc-tile:${scale}`, altText: e.path });
       } else if (e.type === 'text') {
         const f = e.font;
-        slide.addText(textRuns(e.text, f), {
+        slide.addText(textRuns(e.text, f, e.para_space), {
           ...box,
           fontFace: f.family || DEFAULT_FONT,
           fontSize: f.size,
@@ -80,22 +80,33 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
   return pres;
 }
 
-// 飾りの無い文字はそのまま。飾りがあれば、区切り（run）の配列にする
-function textRuns(text, f) {
+// 飾りも改行も無い文字はそのまま。あれば、区切り（run）の配列にする
+function textRuns(text, f, paraSpace) {
   if (!hasRich(text)) return text;
   const runs = [];
-  for (const g of parseRich(text)) {
-    const lines = g.text.split('\n');
-    lines.forEach((t, j) => {
+  const paras = paragraphs(text);
+  paras.forEach((p, pi) => {
+    const start = runs.length;
+    let soft = false;
+    for (const g of parseRich(p)) {
+      if (g.br) {
+        soft = true;
+        continue;
+      }
       const options = {};
       if (g.b || f.bold) options.bold = true;
       if (g.i || f.italic) options.italic = true;
       if (g.sup) options.superscript = true;
       else if (g.sub) options.subscript = true;
-      if (j < lines.length - 1) options.breakLine = true;
-      runs.push({ text: t, options });
-    });
-  }
+      if (soft) options.softBreakBefore = true;
+      soft = false;
+      runs.push({ text: g.text, options });
+    }
+    if (soft) runs.push({ text: '', options: { softBreakBefore: true } });
+    if (runs.length === start) runs.push({ text: '', options: {} }); // 空の段落
+    if (pi > 0 && paraSpace > 0) runs[start].options.paraSpaceBefore = paraSpace;
+    if (pi < paras.length - 1) runs[runs.length - 1].options.breakLine = true;
+  });
   return runs;
 }
 
