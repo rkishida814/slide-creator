@@ -19,8 +19,9 @@ const S = {
   layout: null,
   error: null,
   slideId: null,
-  selected: null, // 選んだ枠の path
-  focus: null, // 拡大している枠の path
+  selected: null, // 1 つだけ選んでいるときの path
+  sel: [], // 選択中のボックスの path（複数のこともある）
+  zoom: 1,
   outline: true,
   imageSizes: new Map(),
   imageURLs: new Map(),
@@ -45,8 +46,7 @@ async function openSource(source) {
     S.imageSizes.clear();
     S.imageURLs.clear();
     S.slideId = null;
-    S.selected = null;
-    S.focus = null;
+    setSel([]);
     $('#project-name').textContent = source.name + (source.writable ? '' : '（見本）');
     document.title = `${source.name} — slide-creator`;
     $('#empty').hidden = true;
@@ -115,8 +115,7 @@ async function rebuild() {
     S.error = e.message;
   }
   if (S.layout && !S.layout.slides.find((s) => s.id === S.slideId)) S.slideId = S.layout.slides[0]?.id || null;
-  if (S.selected && !findBox(S.selected)) S.selected = null;
-  if (S.focus && !findBox(S.focus)) S.focus = null;
+  if ((S.sel || []).some((x) => !findBox(x))) setSel([]);
   status(S.error || '', !!S.error);
   renderSlideTabs();
   renderPreview();
@@ -138,29 +137,27 @@ function findBox(path) {
 function renderSlideTabs() {
   const el = $('#slide-tabs');
   el.innerHTML = '';
-  for (const s of S.layout?.slides || []) {
-    const b = document.createElement('button');
-    b.textContent = s.id;
-    b.className = s.id === S.slideId ? 'on' : '';
-    b.onclick = () => {
-      S.slideId = s.id;
-      S.selected = null;
-      S.focus = null;
-      renderSlideTabs();
-      renderPreview();
-      renderProps();
-    };
-    el.append(b);
-  }
+  const slides = S.layout?.slides || [];
+  if (!slides.length) return;
+  const sel = selectEl(slides.map((s, i) => [s.id, `${i + 1}ページ`]), S.slideId, (v) => {
+    S.slideId = v;
+    setSel([]);
+    setZoom(1);
+    renderPreview();
+    renderProps();
+  });
+  sel.className = 'page-select';
+  el.append(sel);
 }
 
 const FRAME_CSS = `
 html { background: #dfe3e8; }
 body { background: transparent !important; overflow: hidden; }
 section.slide { position: absolute; left: 0; top: 0; box-shadow: 0 1px 6px rgba(0,0,0,.25); }
-.sel { position: absolute; pointer-events: none; z-index: 10; }
-.drop { position: absolute; pointer-events: none; z-index: 11; display: none; }
-.focusdim { position: absolute; pointer-events: none; z-index: 9; }
+.sel, .drop, .hov { position: absolute; pointer-events: none; display: none; }
+.hov { z-index: 9; }
+.sel { z-index: 10; }
+.drop { z-index: 11; }
 `;
 
 function renderPreview() {
@@ -179,6 +176,24 @@ function renderPreview() {
   frame.srcdoc = html;
 }
 
+// 選択。1 つならその枠の設定、2 つ以上なら比率と背景を出す
+function setSel(paths) {
+  S.sel = paths;
+  S.selected = paths.length === 1 ? paths[0] : null;
+}
+
+function select(path) {
+  setSel(path ? [path] : []);
+  applyView();
+  renderProps();
+}
+
+function setZoom(z) {
+  S.zoom = z;
+  $('#zoom').value = String(Math.round(z * 100));
+  $('#zoom-val').textContent = `${Math.round(z * 100)}%`;
+}
+
 function setupFrame() {
   const frame = $('#frame');
   const doc = frame.contentDocument;
@@ -186,32 +201,36 @@ function setupFrame() {
   if (!sec) return;
   sec.style.transform = 'none';
   S.ppu = sec.getBoundingClientRect().width / S.layout.width; // キャンバスの単位あたりの px
-  for (const cls of ['focusdim', 'sel', 'drop']) {
+  for (const cls of ['hov', 'sel', 'drop']) {
     const d = doc.createElement('div');
     d.className = cls;
     sec.append(d);
   }
-  // ドラッグで別のボックスと入れ替える。6 px 以上動かしたらドラッグとみなし、クリックのメニューは出さない
+  // クリックで 1 つ選ぶ。ドラッグで、長方形になるように複数選ぶ。
+  // ⌥（option）を押しながらドラッグすると、離した先のボックスと中身を入れ替える
   let drag = null;
   let dragged = false;
   doc.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    const b = boxAt(e);
-    if (b && b.depth > 0) {
-      e.preventDefault();
-      drag = { box: b, x: e.clientX, y: e.clientY, moving: false };
-    }
+    const b = leafAt(e);
+    if (!b) return;
+    e.preventDefault();
+    drag = { box: b, x: e.clientX, y: e.clientY, moving: false, swap: e.altKey };
   });
   doc.addEventListener('mousemove', (e) => {
-    if (!drag) return;
+    if (!drag) return hover(leafAt(e));
     if (!drag.moving && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 6) {
       drag.moving = true;
-      closeMenu();
-      doc.body.style.cursor = 'grabbing';
+      hover(null);
+      if (drag.swap) doc.body.style.cursor = 'grabbing';
     }
-    if (drag.moving) {
-      const t = boxAt(e);
+    if (!drag.moving) return;
+    const t = leafAt(e);
+    if (drag.swap) {
       showDrop(t && canSwap(drag.box, t) ? t : null);
+    } else if (t) {
+      S.dragSel = rectSelect(drag.box, t);
+      applyView();
     }
   });
   doc.addEventListener('mouseup', (e) => {
@@ -222,46 +241,64 @@ function setupFrame() {
     showDrop(null);
     if (!d.moving) return;
     dragged = true;
-    const t = boxAt(e);
-    if (t && t.path !== d.box.path) {
-      if (canSwap(d.box, t)) swapBoxes(d.box, t);
-      else status('このボックスとは入れ替えられません。テンプレートの一部のボックスと、互いに外側と内側の関係にあるボックスは入れ替えられません。', true);
+    if (d.swap) {
+      const t = leafAt(e);
+      if (t && t.path !== d.box.path) {
+        if (canSwap(d.box, t)) swapBoxes(d.box, t);
+        else status('このボックスとは入れ替えられません。テンプレートの一部のボックスは入れ替えられません。', true);
+      }
+      return;
     }
+    const r = S.dragSel;
+    S.dragSel = null;
+    if (r) setSel(r.leaves.map((l) => l.path));
+    applyView();
+    renderProps();
   });
+  doc.addEventListener('mouseleave', () => hover(null));
   doc.addEventListener('click', (e) => {
     if (dragged) {
       dragged = false;
       return;
     }
-    const box = boxAt(e);
-    if (!box) return closeMenu();
-    const fr = $('#frame').getBoundingClientRect();
-    openMenu(box, fr.left + e.clientX, fr.top + e.clientY);
+    const b = leafAt(e);
+    select(b ? b.path : null);
   });
   doc.addEventListener('keydown', onKey);
   applyView();
   measureOverflow(doc);
 }
 
-function showDrop(box) {
-  const sec = $('#frame').contentDocument?.querySelector('section.slide');
-  const el = sec?.querySelector('.drop');
+function placeIn(el, rect) {
   if (!el) return;
-  if (!box) {
-    el.style.display = 'none';
-    return;
-  }
+  el.style.display = rect ? 'block' : 'none';
+  if (!rect) return;
   const ppu = S.ppu;
+  Object.assign(el.style, { left: `${rect.x * ppu}px`, top: `${rect.y * ppu}px`, width: `${rect.w * ppu}px`, height: `${rect.h * ppu}px` });
+}
+
+function frameEl(cls) {
+  return $('#frame').contentDocument?.querySelector(`section.slide .${cls}`);
+}
+
+// 選んでいないボックスにマウスを乗せたら、青く示す
+function hover(box) {
+  const el = frameEl('hov');
+  if (!el) return;
+  const show = box && !(S.sel || []).includes(box.path);
+  placeIn(el, show ? box.rect : null);
   const s = S.view?.s || 1;
-  Object.assign(el.style, {
-    display: 'block',
-    left: `${box.rect.x * ppu}px`,
-    top: `${box.rect.y * ppu}px`,
-    width: `${box.rect.w * ppu}px`,
-    height: `${box.rect.h * ppu}px`,
-    outline: `${3 / s}px dashed #ea580c`,
-    background: 'rgba(234, 88, 12, .12)',
-  });
+  el.style.outline = `${1.5 / s}px solid rgba(37, 99, 235, .7)`;
+  el.style.background = 'rgba(37, 99, 235, .14)';
+}
+
+function showDrop(box) {
+  const el = frameEl('drop');
+  if (!el) return;
+  placeIn(el, box ? box.rect : null);
+  const s = S.view?.s || 1;
+  el.style.outline = `${3 / s}px dashed #ea580c`;
+  el.style.background = 'rgba(234, 88, 12, .12)';
 }
 
 // 入れ替えられるのは、どちらも YAML にそのまま書かれたボックスで、外側と内側の関係にないもの
@@ -281,145 +318,93 @@ function swapBoxes(a, b) {
   const nb = doc.getIn(b.src.path, true) ?? doc.createNode({});
   doc.setIn(a.src.path, nb);
   doc.setIn(b.src.path, na);
-  S.selected = null;
+  setSel([]);
   return fileChanged(file);
 }
 
-// 拡大・位置合わせ
+const isLeaf = (b) => b.kind !== 'split' && b.kind !== 'grid';
+
+function unionRect(rs) {
+  const x = Math.min(...rs.map((r) => r.x));
+  const y = Math.min(...rs.map((r) => r.y));
+  const x2 = Math.max(...rs.map((r) => r.x + r.w));
+  const y2 = Math.max(...rs.map((r) => r.y + r.h));
+  return { x, y, w: x2 - x, h: y2 - y };
+}
+
+function overlaps(q, r) {
+  const e = 1e-6;
+  return q.x < r.x + r.w - e && q.x + q.w > r.x + e && q.y < r.y + r.h - e && q.y + q.h > r.y + e;
+}
+
+// 2 つのボックスを含む長方形を作り、その長方形にかかるボックスが入るまで広げる
+function rectSelect(a, b) {
+  const leaves = curSlide().boxes.filter(isLeaf);
+  let r = unionRect([a.rect, b.rect]);
+  for (let k = 0; k < 50; k++) {
+    const inc = leaves.filter((l) => overlaps(l.rect, r));
+    const r2 = unionRect(inc.map((l) => l.rect));
+    const same = Math.abs(r2.x - r.x) + Math.abs(r2.y - r.y) + Math.abs(r2.w - r.w) + Math.abs(r2.h - r.h) < 1e-6;
+    r = r2;
+    if (same) return { rect: r, leaves: inc };
+  }
+  return { rect: r, leaves: leaves.filter((l) => overlaps(l.rect, r)) };
+}
+
+function selectionRect() {
+  const bs = (S.sel || []).map(findBox).filter(Boolean);
+  return bs.length ? unionRect(bs.map((b) => b.rect)) : null;
+}
+
+// 拡大・位置合わせ。拡大しているときは、選択中のボックスを中心にする
 function applyView() {
   const frame = $('#frame');
   const doc = frame.contentDocument;
   const sec = doc?.querySelector('section.slide');
   const slide = curSlide();
   if (!sec || !slide) return;
-  const fb = S.focus ? findBox(S.focus) : null;
-  const r = fb ? fb.rect : slide.rect;
+  const R = slide.rect;
   const ppu = S.ppu;
   const m = 24;
   const fw = frame.clientWidth;
   const fh = frame.clientHeight;
-  const s = Math.min((fw - 2 * m) / (r.w * ppu), (fh - 2 * m) / (r.h * ppu));
-  const offX = (fw - r.w * ppu * s) / 2;
-  const offY = (fh - r.h * ppu * s) / 2;
+  const base = Math.min((fw - 2 * m) / (R.w * ppu), (fh - 2 * m) / (R.h * ppu));
+  const s = base * (S.zoom || 1);
+  const selRect = S.dragSel?.rect || selectionRect();
+  let cx = R.w / 2;
+  let cy = R.h / 2;
+  if ((S.zoom || 1) > 1 && selRect) {
+    cx = selRect.x + selRect.w / 2;
+    cy = selRect.y + selRect.h / 2;
+  }
+  const offX = fw / 2 - cx * ppu * s;
+  const offY = fh / 2 - cy * ppu * s;
   sec.style.transformOrigin = '0 0';
-  sec.style.transform = `translate(${offX}px, ${offY}px) scale(${s}) translate(${-r.x * ppu}px, ${-r.y * ppu}px)`;
-  S.view = { s, offX, offY, r };
+  sec.style.transform = `translate(${offX}px, ${offY}px) scale(${s})`;
+  S.view = { s, offX, offY, r: { x: 0, y: 0 } };
 
-  const place = (el, rect) => {
-    el.style.display = rect ? 'block' : 'none';
-    if (!rect) return;
-    Object.assign(el.style, { left: `${rect.x * ppu}px`, top: `${rect.y * ppu}px`, width: `${rect.w * ppu}px`, height: `${rect.h * ppu}px` });
-  };
-  const dim = sec.querySelector('.focusdim');
-  place(dim, fb ? fb.rect : null);
-  dim.style.boxShadow = `0 0 0 ${Math.max(S.layout.width, S.layout.height) * ppu}px rgba(40, 44, 52, .45)`;
-  const selPath = S.pending || S.selected;
-  const sel = selPath ? findBox(selPath) : null;
   const selEl = sec.querySelector('.sel');
-  place(selEl, sel ? sel.rect : null);
+  placeIn(selEl, selRect);
   selEl.style.outline = `${2.5 / s}px solid #2563eb`;
   selEl.style.background = 'rgba(37, 99, 235, .08)';
-  renderCrumbs();
-  $('#btn-focus').disabled = !S.selected || S.selected === S.focus;
-  $('#btn-whole').disabled = !S.focus;
+  const one = S.selected ? findBox(S.selected) : null;
+  $('#btn-split').disabled = !(one && one.src && isLeaf(one));
+  $('#btn-delete').disabled = !(one && canRemove(one));
 }
 
-// クリックした点を含む、いちばん内側の枠
-function boxAt(e) {
+// クリックした点を含む、いちばん内側のボックス（分割・格子の間の隙間なら null）
+function leafAt(e) {
   const slide = curSlide();
   if (!slide || !S.view) return null;
-  const { s, offX, offY, r } = S.view;
-  const x = (e.clientX - offX) / s / S.ppu + r.x;
-  const y = (e.clientY - offY) / s / S.ppu + r.y;
+  const { s, offX, offY } = S.view;
+  const x = (e.clientX - offX) / s / S.ppu;
+  const y = (e.clientY - offY) / s / S.ppu;
   let best = null;
   for (const b of slide.boxes) {
     const q = b.rect;
     if (x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h && (!best || b.depth >= best.depth)) best = b;
   }
-  return best;
-}
-
-// 枠をクリックしたときのメニュー：分けるか、編集するか
-function openMenu(box, x, y) {
-  const m = $('#menu');
-  S.pending = box.path;
-  applyView();
-  m.innerHTML = '';
-  m.append(h('div', 'menu-title', `${KIND_LABEL[box.kind]}　${fmt(box.rect.w)} × ${fmt(box.rect.h)} ${S.layout.unit}`));
-  if (box.src) {
-    const count = selectEl([2, 3, 4, 5, 6].map((n) => [String(n), `${n} つ`]), String(S.splitCount || 2), (v) => (S.splitCount = +v));
-    const r = h('div', 'menu-row');
-    r.append(h('span', null, '分ける数'), count);
-    m.append(
-      r,
-      btn('上下に分ける', () => {
-        closeMenu();
-        splitBox(box, 'rows', S.splitCount || 2);
-      }),
-      btn('左右に分ける', () => {
-        closeMenu();
-        splitBox(box, 'cols', S.splitCount || 2);
-      }),
-    );
-  }
-  const ed = btn('このボックスを編集', () => {
-    closeMenu();
-    select(box.path);
-  });
-  ed.className = 'primary';
-  m.append(ed);
-  if (canRemove(box)) {
-    const rm = btn('このボックスを消す', () => {
-      closeMenu();
-      removeBox(box);
-    });
-    rm.className = 'danger';
-    m.append(rm);
-  }
-  m.hidden = false;
-  const mw = m.offsetWidth;
-  const mh = m.offsetHeight;
-  m.style.left = `${Math.min(x + 8, window.innerWidth - mw - 8)}px`;
-  m.style.top = `${Math.min(y + 8, window.innerHeight - mh - 8)}px`;
-}
-
-function closeMenu() {
-  const m = $('#menu');
-  if (m.hidden) return;
-  m.hidden = true;
-  S.pending = null;
-  applyView();
-}
-
-function select(path) {
-  S.selected = path;
-  applyView();
-  renderProps();
-}
-
-function focusOn(path) {
-  const b = findBox(path);
-  S.focus = b && b.depth > 0 ? path : null;
-  applyView();
-}
-
-function renderCrumbs() {
-  const el = $('#crumbs');
-  el.innerHTML = '';
-  const sel = S.selected ? findBox(S.selected) : null;
-  if (!sel) return;
-  const chain = [];
-  for (let b = sel; b; b = b.parent ? findBox(b.parent) : null) chain.unshift(b);
-  chain.forEach((b, i) => {
-    if (i) el.append(' › ');
-    const a = document.createElement('a');
-    a.textContent = b.id || b.path.split(/[./]/).pop() || b.path;
-    if (b.depth === 0) a.textContent = b.path;
-    a.className = b === sel ? 'cur' : '';
-    a.title = b.path;
-    a.onclick = () => select(b.path);
-    el.append(a);
-  });
+  return best && isLeaf(best) ? best : null;
 }
 
 function measureOverflow(doc) {
@@ -606,10 +591,11 @@ function renderProps() {
   const el = $('#node');
   el.innerHTML = '';
   if (!S.layout) return;
+  if ((S.sel || []).length > 1) return renderMulti(el);
   const box = S.selected ? findBox(S.selected) : null;
   el.append(h('h2', null, '選択中のボックス'));
   if (!box) {
-    el.append(h('p', 'note', 'プレビューでボックスをクリックし、「このボックスを編集」を選ぶと、ここに設定が出ます。'));
+    el.append(h('p', 'note', 'プレビューでボックスをクリックすると選択し、ここに設定が出ます。ドラッグすると、長方形になる範囲で複数のボックスを選択します。'));
     return;
   }
   const node = box.node || {};
@@ -623,25 +609,19 @@ function renderProps() {
   // 種類
   const fsSize = sizeFields(box);
   if (fsSize) el.append(fsSize);
-  const fsKind = h('div');
-  fsKind.append(
-    row('種類', selectEl(KIND_OPTS, box.kind, (v) => changeKind(box, v))),
-  );
-  el.append(fsKind);
+  if (isLeaf(box)) {
+    const opts = box.kind === 'empty' ? [['', '（画像か文字を選ぶ）'], ...KIND_OPTS] : KIND_OPTS;
+    el.append(row('中身', selectEl(opts, box.kind === 'empty' ? '' : box.kind, (v) => v && changeKind(box, v))));
+  }
 
   // 中身
-  if (box.kind === 'split') el.append(splitFields(box, node));
-  if (box.kind === 'grid') el.append(gridFields(box, node));
   if (box.kind === 'image') el.append(imageFields(box, node, inh));
   if (box.kind === 'text') el.append(textFields(box, node, inh));
-
-  // 引き継ぐ設定（分割・格子のとき）
-  if (box.kind === 'split' || box.kind === 'grid') el.append(inheritFields(box, node, inh));
 
   // 枠
   const fsBox = fieldset('余白・背景・枠線');
   fsBox.append(
-    row('内側の余白', textEl(fmtList(node.padding), '0', (v) => edit(box, 'padding', parseList(v))), '1 つ書くと四方共通。2 つは上下, 左右、4 つは上, 右, 下, 左'),
+    paddingRow(box, node),
     ...bgRows(node.background, (v) => edit(box, 'background', v)),
     row('枠線', h2(
       numEl(node.border?.width ?? '', 'pt', (v) => edit(box, 'border', v === '' ? undefined : { width: +v, color: node.border?.color || '#333333' })),
@@ -650,11 +630,122 @@ function renderProps() {
     )),
   );
   el.append(fsBox);
+}
 
-  // 操作
-  const acts = h('div', 'actions');
-  acts.append(btn('このボックスを拡大', () => focusOn(box.path)));
-  el.append(acts);
+// 内側の余白。上・右・下・左の 4 つを 1 行で
+function paddingRow(box, node) {
+  const p = node.padding;
+  let v;
+  if (Array.isArray(p)) v = p.length === 2 ? [p[0], p[1], p[0], p[1]] : [p[0], p[1], p[2], p[3]];
+  else v = [p ?? 0, p ?? 0, p ?? 0, p ?? 0];
+  const wrap = h('span', 'in pad4');
+  [['↑', '上'], ['→', '右'], ['↓', '下'], ['←', '左']].forEach(([icon, title], k) => {
+    const ic = h('span', 'pad-ic', icon);
+    ic.title = title;
+    const inp = numEl(v[k] ?? 0, '0', (x) => {
+      v[k] = x === '' ? 0 : +x;
+      const a = v.map((y) => +y || 0);
+      edit(box, 'padding', a.every((y) => y === a[0]) ? a[0] || undefined : a);
+    });
+    wrap.append(ic, inp);
+  });
+  return row('内側の余白', wrap);
+}
+
+// 複数のボックスを選んだとき。共通の外側の分割について、選んだ部分どうしの比率と、まとめた背景を設定する
+function renderMulti(el) {
+  const boxes = S.sel.map(findBox).filter(Boolean);
+  const r = selectionRect();
+  const u = S.layout.unit;
+  el.append(h('h2', null, '選択中のボックス'), h('p', 'meta', `${boxes.length} 個　${fmt(r.w)} × ${fmt(r.h)} ${u}`));
+  const lca = commonAncestor(boxes);
+  if (!lca || !lca.src) return;
+  const kids = curSlide().boxes.filter((b) => b.parent === lca.path);
+  const covered = kids.map((k, i) => [k, i]).filter(([k]) => overlaps(k.rect, r));
+  const all = covered.length === kids.length;
+  if (lca.src.mode === 'shared') el.append(h('p', 'warn', 'このボックスは、複数のスライドで共通に使うボックスの組み合わせ（テンプレート）の一部です。変えると、このテンプレートを使う全てのスライドが変わります。'));
+
+  if (lca.kind === 'split' && covered.length >= 2) {
+    const n = kids.length;
+    const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? [...lca.node.ratio] : Array(n).fill(1);
+    const parts = [];
+    covered.forEach(([, i], j) => {
+      if (j) parts.push(h('span', 'ratio-sep', ':'));
+      const t = textEl(String(ratio[i]), '1', (x) => {
+        const pv = parseLen(x);
+        if (pv === undefined) return;
+        ratio[i] = pv;
+        edit(lca, 'ratio', ratio);
+      });
+      t.className = 'ratio-in';
+      parts.push(t);
+    });
+    const fs = fieldset(lca.node.split === 'rows' ? '上下の比率' : '左右の比率');
+    fs.append(h2(...parts), h('div', 'note', `${lca.node.split === 'rows' ? '上から' : '左から'}順に並ぶ。「3cm」のように単位を付けると、その長さに固定される`));
+    el.append(fs);
+  }
+
+  const fsBg = fieldset('背景（選んだ範囲全体）');
+  if (all) {
+    fsBg.append(...bgRows(lca.node.background, (v) => edit(lca, 'background', v)));
+  } else if (lca.kind === 'split') {
+    fsBg.append(...bgRows(undefined, (v) => v && groupWithBackground(lca, kids, covered[0][1], covered[covered.length - 1][1], v)));
+  } else {
+    fsBg.append(h('p', 'note', '格子の一部のセルには、まとめた背景を付けられません。'));
+  }
+  el.append(fsBg);
+}
+
+function commonAncestor(boxes) {
+  const chain = (b) => {
+    const c = [];
+    for (let x = b; x; x = x.parent ? findBox(x.parent) : null) c.unshift(x);
+    return c;
+  };
+  const chains = boxes.map(chain);
+  let lca = null;
+  for (let d = 0; ; d++) {
+    const c = chains[0][d];
+    if (!c || !chains.every((ch) => ch[d] && ch[d].path === c.path)) break;
+    lca = c;
+  }
+  return lca;
+}
+
+// 分割の一部の部分に背景を付ける。その部分をまとめて 1 つの分割にし、まとめた分割に背景を付ける
+function groupWithBackground(lca, kids, i0, i1, bg) {
+  if (lca.src.mode !== 'direct') return status('テンプレートの一部なので、この範囲にまとめた背景を付けられません。', true);
+  const doc = S.files[lca.src.file].doc;
+  const path = lca.src.path;
+  const n = kids.length;
+  const children = getJS(doc, [...path, 'children']);
+  if (!Array.isArray(children) || children.length !== n) return status('この範囲にはまとめた背景を付けられません。', true);
+  const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? [...lca.node.ratio] : Array(n).fill(1);
+  const sub = children.slice(i0, i1 + 1);
+  const subR = ratio.slice(i0, i1 + 1);
+  const u = S.layout.unit;
+  const gap = toUnit(lca.node.gap ?? 0, u);
+  let outer;
+  if (subR.every((x) => typeof x === 'number')) outer = subR.reduce((a, x) => a + x, 0);
+  else if (subR.every((x) => typeof x === 'string')) outer = `${Math.round((subR.reduce((a, x) => a + toUnit(x, u), 0) + gap * (sub.length - 1)) * 1000) / 1000}${u}`;
+  else return status('比率と長さが混ざった範囲には、まとめた背景を付けられません。', true);
+  const group = { split: lca.node.split, ...(lca.node.gap != null ? { gap: lca.node.gap } : {}), ratio: subR, children: sub, background: bg };
+  children.splice(i0, sub.length, group);
+  ratio.splice(i0, sub.length, outer);
+  setProp(doc, path, 'children', children);
+  setProp(doc, path, 'ratio', ratio);
+  setSel([]);
+  // まとめた後も同じ範囲を選んだままにする（続けて色や画像を変えられるように）
+  const groupPath = `${lca.path}.${i0}`;
+  return fileChanged(lca.src.file).then(() => {
+    const inside = (b) => b && (b.path === groupPath || (b.parent && inside(findBox(b.parent))));
+    const leaves = curSlide().boxes.filter((b) => isLeaf(b) && inside(b));
+    if (leaves.length > 1) {
+      setSel(leaves.map((b) => b.path));
+      applyView();
+      renderProps();
+    }
+  });
 }
 
 // スライド全体の設定（全スライド共通）。用紙の寸法は cm で持ち、書き込むときに YAML の単位に直す
@@ -902,24 +993,46 @@ async function cropDialog(box, node, el) {
   if (Array.isArray(result)) return edit(box, 'crop', result);
 }
 
+function wrapWhole(text, f) {
+  let t = text;
+  if (f.italic) t = `<i>${t}</i>`;
+  if (f.bold) t = `<b>${t}</b>`;
+  return t;
+}
+
+// 揃え方（横）と（縦）を 1 行に
+function alignRow(box, node, inh, hDflt, vDflt) {
+  const short = (opts, inherited, dflt) => {
+    const name = (v) => (opts.find((o) => o[0] === v) || [, v])[1];
+    return [['', inherited != null ? `${name(inherited)}（外側のボックスと同じ）` : `${name(dflt)}（指定なし）`], ...opts];
+  };
+  const r = h('div', 'row-line');
+  r.append(
+    h('label', null, '揃え方（横）'),
+    selectEl(short(H_OPTS, inh.align, hDflt), node.align ?? '', (v) => edit(box, 'align', v || undefined)),
+    h('label', null, '揃え方（縦）'),
+    selectEl(short(V_OPTS, inh.valign, vDflt), node.valign ?? '', (v) => edit(box, 'valign', v || undefined)),
+  );
+  return r;
+}
+
 function textFields(box, node, inh) {
   const fs = fieldset('文字');
   const f = node.font || {};
   const fi = inh.font || {};
   fs.append(
-    row('文字', richEditor(String(node.text ?? ''), (v) => {
+    row('文字', richEditor(wrapWhole(String(node.text ?? ''), f), (v) => {
       S.keepPanel = box.path;
-      edit(box, 'text', v);
+      const off = box.src.mode === 'direct' ? undefined : false;
+      const pairs = [['text', v]];
+      if (f.bold) pairs.push([['font', 'bold'], off]);
+      if (f.italic) pairs.push([['font', 'italic'], off]);
+      editMany(box, pairs);
     })),
     row('大きさ', h2(numEl(f.size ?? '', String(fi.size ?? 18), (v) => edit(box, ['font', 'size'], v === '' ? undefined : +v)), 'pt')),
     row('フォント', selectEl(withInherit(FONT_OPTS, fi.family, 'Arial'), f.family ?? '', (v) => edit(box, ['font', 'family'], v || undefined))),
-    row('太字・斜体・色', h2(
-      checkEl('太字', f.bold ?? false, (v) => edit(box, ['font', 'bold'], v || undefined)),
-      checkEl('斜体', f.italic ?? false, (v) => edit(box, ['font', 'italic'], v || undefined)),
-      colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined)),
-    )),
-    row('横の揃え方', selectEl(withInherit(H_OPTS, inh.align, 'left'), node.align ?? '', (v) => edit(box, 'align', v || undefined))),
-    row('縦の揃え方', selectEl(withInherit(V_OPTS, inh.valign, 'top'), node.valign ?? '', (v) => edit(box, 'valign', v || undefined))),
+    row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
+    alignRow(box, node, inh, 'left', 'top'),
     row('行の高さ', numEl(node.line_height ?? '', String(inh.line_height ?? 1.2), (v) => edit(box, 'line_height', v === '' ? undefined : +v), 0.05)),
   );
   return fs;
@@ -958,8 +1071,9 @@ function richEditor(value, onCommit) {
     last = v;
     onCommit(v);
   };
-  for (const [cmd, label, title] of [['bold', 'B', '太字'], ['italic', 'I', '斜体'], ['superscript', 'x²', '上付き'], ['subscript', 'x₂', '下付き']]) {
-    const b = h('button', `rich-btn rich-${cmd}`, label);
+  for (const [cmd, label, title] of [['bold', 'B', '太字'], ['italic', 'I', '斜体'], ['superscript', 'x<sup>2</sup>', '上付き'], ['subscript', 'x<sub>2</sub>', '下付き']]) {
+    const b = h('button', `rich-btn rich-${cmd}`);
+    b.innerHTML = label;
     b.type = 'button';
     b.title = title;
     b.onmousedown = (e) => {
@@ -1037,7 +1151,7 @@ function bgRows(cur, write) {
 }
 
 const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: '文字' };
-const KIND_OPTS = [['empty', '空き（何も置かない）'], ['split', '分割（中を上下か左右に分ける）'], ['grid', '格子（同じ大きさで縦横に並べる）'], ['image', '画像'], ['text', '文字']];
+const KIND_OPTS = [['image', '画像'], ['text', '文字']];
 const FIT_OPTS = [['contain', '切らずに全体を収める'], ['cover', 'ボックスいっぱいに広げ、はみ出た部分を切る'], ['stretch', '縦横比を変えてボックスに合わせる']];
 const H_OPTS = [['left', '左'], ['center', '中央'], ['right', '右']];
 const FONT_OPTS = FONTS.map((f) => [f, f]);
@@ -1266,14 +1380,23 @@ function onKey(e) {
   }
   const tag = (e.target.tagName || '').toLowerCase();
   if (['input', 'textarea', 'select'].includes(tag)) return;
+  if (e.key === 'Escape') select(null);
+}
+
+// 選択中のボックスを分割する（分割数と、上下か左右かを選ぶ）
+function openSplitDialog() {
   const box = S.selected ? findBox(S.selected) : null;
-  if (e.key === 'Escape' && !$('#menu').hidden) return closeMenu();
-  if (e.key === 'Escape') {
-    if (box?.parent) select(box.parent);
-    else if (S.focus) focusOn(null);
-  } else if (e.key === 'Enter' && box) {
-    focusOn(box.path);
-  }
+  if (!box || !box.src) return;
+  const dlg = $('#split-dialog');
+  dlg.returnValue = '';
+  dlg.onclose = () => {
+    const n = Math.max(2, Math.min(12, parseInt($('#split-n').value, 10) || 2));
+    if (dlg.returnValue === 'rows' || dlg.returnValue === 'cols') {
+      setSel([]);
+      splitBox(box, dlg.returnValue, n);
+    }
+  };
+  dlg.showModal();
 }
 
 $('#btn-open').onclick = async () => {
@@ -1293,16 +1416,26 @@ $('#btn-open').onclick = async () => {
 $('#btn-save').onclick = save;
 $('#btn-pptx').onclick = exportPPTX;
 $('#btn-pdf').onclick = exportPDF;
-$('#btn-focus').onclick = () => S.selected && focusOn(S.selected);
-$('#btn-whole').onclick = () => focusOn(null);
+$('#btn-split').onclick = openSplitDialog;
+$('#btn-delete').onclick = () => {
+  const box = S.selected ? findBox(S.selected) : null;
+  if (box) removeBox(box);
+};
+$('#zoom').oninput = (e) => {
+  setZoom(+e.target.value / 100);
+  applyView();
+};
+$('#btn-whole').onclick = () => {
+  setSel([]);
+  setZoom(1);
+  applyView();
+  renderProps();
+};
 $('#chk-outline').onchange = (e) => {
   S.outline = e.target.checked;
   renderPreview();
 };
 document.addEventListener('keydown', onKey);
-document.addEventListener('mousedown', (e) => {
-  if (!$('#menu').contains(e.target)) closeMenu();
-});
 window.addEventListener('resize', () => applyView());
 window.addEventListener('beforeunload', (e) => {
   if (anyDirty()) e.preventDefault();

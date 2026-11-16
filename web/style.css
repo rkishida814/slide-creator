@@ -128,3 +128,32 @@ legend { color: var(--muted); padding: 0 4px; }
 }
 .rich:focus { border-color: var(--accent); }
 /* ドラッグで入れ替える先 */
+
+/* ヘッダーの道具 */
+.bar .icon { display: inline-flex; align-items: center; padding: 5px 8px; }
+.bar .zoom { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+.bar .zoom input[type=range] { width: 140px; }
+#zoom-val { min-width: 3.2em; font-size: 14px; }
+.page-select { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: #fff; }
+#split-dialog { border: 0; border-radius: 10px; padding: 16px 18px; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+#split-dialog h3 { margin: 0 0 12px; font-size: 17px; }
+.split-n input { width: 5em; margin-left: 8px; border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; }
+/* 内側の余白（上・右・下・左） */
+.pad4 { flex-wrap: nowrap; }
+.pad4 .pad-ic { color: var(--muted); margin-left: 4px; }
+.pad4 .pad-ic:first-child { margin-left: 0; }
+.row .pad4 input[type=number] { width: 3.6em; }
+/* 複数選択の比率 */
+.ratio-in { width: 4.5em !important; flex: none; }
+.ratio-sep { color: var(--muted); }
+
+/* 揃え方（横）（縦）を 1 行に */
+.row-line { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.row-line label { color: #374151; white-space: nowrap; }
+.row-line select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 5px; padding: 3px 4px; background: #fff; }
+.rich-btn sup, .rich-btn sub { font-size: .7em; line-height: 0; }
+.row-line select { width: 0; }
+.row .pad4 { gap: 2px; }
+.row .pad4 input[type=number] { width: 3.1em; padding: 3px 4px; }
+.ratio-in { border: 1px solid var(--line); border-radius: 5px; padding: 3px 6px; background: #fff; }
+.ratio-sep { margin: 0 2px; }

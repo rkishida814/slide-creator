@@ -38,8 +38,7 @@ export function renderHTML(layout, opts = {}) {
         ? s.boxes
             .filter((b) => b.depth > 0)
             .map((b) => {
-              const label = b.id || b.path.slice(s.id.length + 1);
-              return `<div class="ol" style="${pos(b.rect, L)}"><span style="font-size:${L(labelSize)}">${esc(label)}</span></div>`;
+              return `<div class="ol" style="${pos(b.rect, L)}"></div>`;
             })
             .join('\n')
         : '';
