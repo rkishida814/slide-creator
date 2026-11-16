@@ -1008,14 +1008,14 @@ function wrapWhole(text, f) {
 
 // 揃え方（横）と（縦）を 1 行に
 function alignRow(box, node, inh, hDflt, vDflt) {
-  const r = h('div', 'row-line');
-  r.append(
-    h('label', null, '揃え方（横）'),
+  // ほかの行と同じく、名前の列と入力の列に分ける（入力の左端を揃える）
+  const vals = h('span', 'in row-line');
+  vals.append(
     selectEl(H_OPTS, node.align ?? inh.align ?? hDflt, (v) => edit(box, 'align', v)),
     h('label', null, '揃え方（縦）'),
     selectEl(V_OPTS, node.valign ?? inh.valign ?? vDflt, (v) => edit(box, 'valign', v)),
   );
-  return r;
+  return row('揃え方（横）', vals);
 }
 
 function textFields(box, node, inh) {

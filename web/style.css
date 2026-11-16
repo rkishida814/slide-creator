@@ -148,7 +148,7 @@ legend { color: var(--muted); padding: 0 4px; }
 .ratio-sep { color: var(--muted); }
 
 /* 揃え方（横）（縦）を 1 行に */
-.row-line { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.row-line { display: flex; align-items: center; gap: 6px; }
 .row-line label { color: #374151; white-space: nowrap; }
 .row-line select { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 5px; padding: 3px 4px; background: #fff; }
 .rich-btn sup, .rich-btn sub { font-size: .7em; line-height: 0; }
