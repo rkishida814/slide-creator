@@ -207,7 +207,7 @@ function setupFrame() {
     sec.append(d);
   }
   // クリックで 1 つ選ぶ。ドラッグで、長方形になるように複数選ぶ。
-  // ⌥（option）を押しながらドラッグすると、離した先のボックスと中身を入れ替える
+  // ⌘（cmd。Windows では Ctrl）を押しながらドラッグすると、離した先のボックスと中身を入れ替える
   let drag = null;
   let dragged = false;
   doc.addEventListener('mousedown', (e) => {
@@ -215,7 +215,7 @@ function setupFrame() {
     const b = leafAt(e);
     if (!b) return;
     e.preventDefault();
-    drag = { box: b, x: e.clientX, y: e.clientY, moving: false, swap: e.altKey };
+    drag = { box: b, x: e.clientX, y: e.clientY, moving: false, swap: e.metaKey || e.ctrlKey };
   });
   doc.addEventListener('mousemove', (e) => {
     if (!drag) return hover(leafAt(e));
