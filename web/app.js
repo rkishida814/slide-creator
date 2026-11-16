@@ -70,6 +70,7 @@ function collectImages(node, out) {
   if (!node || typeof node !== 'object') return;
   if (node.image != null) out.add(String(node.image));
   if (node.background?.image) out.add(String(node.background.image));
+  if (node.icon) out.add(String(node.icon));
   (node.children || []).forEach((c) => collectImages(c, out));
   (node.items || []).forEach((c) => collectImages(c, out));
 }
@@ -1032,6 +1033,8 @@ function textFields(box, node, inh) {
     row('大きさ', h2(numEl(f.size ?? '', String(fi.size ?? 18), (v) => edit(box, ['font', 'size'], v === '' ? undefined : +v)), 'pt')),
     row('フォント', selectEl(withInherit(FONT_OPTS, fi.family, 'Arial'), f.family ?? '', (v) => edit(box, ['font', 'family'], v || undefined))),
     row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
+    row('見出しアイコン', selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined))),
+    ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? '', String(f.size ?? fi.size ?? 18), (v) => edit(box, 'icon_size', v === '' ? undefined : +v)), 'pt'))] : []),
     alignRow(box, node, inh, 'left', 'top'),
     row('行の高さ', numEl(node.line_height ?? '', String(inh.line_height ?? 1.2), (v) => edit(box, 'line_height', v === '' ? undefined : +v), 0.05)),
   );

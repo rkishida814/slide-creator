@@ -239,15 +239,38 @@ function layoutText(node, rect, style, path, ctx) {
   const valign = style.valign || 'top';
   checkAlign(align, valign, path, ctx);
   const font = { size: 18, ...(style.font || {}) };
+  const lineHeight = style.line_height ?? 1.2;
+  let textRect = rect;
+  // 見出しアイコン：icon（画像のファイル）、icon_size（高さ。pt。省くと文字の大きさ）
+  if (node.icon) {
+    const nat = ctx.env.imageSize(node.icon);
+    if (!nat) {
+      ctx.issues.push({ level: 'error', path, msg: `見出しアイコンの画像が読めない: ${node.icon}` });
+    } else {
+      const pt = (v) => (v / 72) * perInch(ctx.unit); // pt → キャンバスの単位
+      const ih = pt(node.icon_size ?? font.size);
+      const iw = (ih * nat.w) / nat.h;
+      const gap = pt(font.size * 0.3);
+      const lineH = pt(font.size * lineHeight);
+      let iy;
+      if (valign === 'top') iy = rect.y + (lineH - ih) / 2;
+      else if (valign === 'bottom') iy = rect.y + rect.h - lineH + (lineH - ih) / 2;
+      else iy = rect.y + (rect.h - ih) / 2;
+      const ir = { x: rect.x, y: iy, w: iw, h: ih };
+      const dpi = nat.w / (iw / perInch(ctx.unit));
+      ctx.elements.push({ type: 'image', path, src: node.icon, rect: ir, cell: ir, crop: [0, 0, 1, 1], natural: nat, dpi: Math.round(dpi), icon: true });
+      textRect = { x: rect.x + iw + gap, y: rect.y, w: Math.max(rect.w - iw - gap, 0), h: rect.h };
+    }
+  }
   ctx.elements.push({
     type: 'text',
     path,
-    rect,
+    rect: textRect,
     text: String(node.text),
     font,
     align,
     valign,
-    line_height: style.line_height ?? 1.2,
+    line_height: lineHeight,
   });
 }
 
