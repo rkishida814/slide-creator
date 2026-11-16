@@ -6,7 +6,7 @@ export function parse(text) {
   if (doc.errors.length) {
     const e = doc.errors[0];
     const line = e.linePos?.[0]?.line;
-    throw new Error(`YAML の誤り${line ? `（${line}行目）` : ''}: ${e.message.split('\n')[0]}`);
+    throw new Error(`layout.yaml の書き方に誤りがあります${line ? `（${line}行目）` : ''}: ${e.message.split('\n')[0]}`);
   }
   return doc;
 }

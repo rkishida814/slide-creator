@@ -11,47 +11,24 @@
 <body>
 <header>
   <strong class="brand">slide-creator</strong>
-  <button id="btn-open" title="手元のプロジェクトフォルダを開く">フォルダを開く</button>
+  <button id="btn-open" title="layout.yaml と画像を入れたフォルダを開く">フォルダを開く</button>
   <button id="btn-reopen" hidden></button>
   <button id="btn-demo">見本</button>
   <span class="sep"></span>
   <button id="btn-save" disabled title="⌘S">保存</button>
-  <button id="btn-reload" disabled title="ファイルを読み直す">読み直す</button>
+  <button id="btn-reload" disabled title="保存していない変更を捨てて、フォルダのファイルを読み直す">読み直す</button>
   <span class="sep"></span>
-  <button id="btn-pptx" disabled>PPTX</button>
-  <button id="btn-pdf" disabled title="印刷画面で「PDFに保存」を選ぶ">PDF</button>
+  <button id="btn-pptx" disabled>PPTX に書き出す</button>
+  <button id="btn-pdf" disabled title="印刷画面で「PDFに保存」を選ぶ">PDF に書き出す</button>
   <span class="sep"></span>
-  <label class="chk"><input type="checkbox" id="chk-outline" checked> 枠を表示</label>
+  <label class="chk"><input type="checkbox" id="chk-outline" checked> 枠の線と名前を表示</label>
   <span id="project-name"></span>
   <span id="status"></span>
 </header>
 <main>
   <aside>
-    <nav class="tabs">
-      <button data-tab="props" class="on">設定</button>
-      <button data-tab="yaml">YAML</button>
-      <button data-tab="issues">問題 <span id="issue-count"></span></button>
-      <button data-tab="help">使い方</button>
-    </nav>
-    <section id="tab-props" class="tab on"></section>
-    <section id="tab-yaml" class="tab">
-      <div class="yaml-head"><select id="yaml-file"></select><span id="yaml-error"></span></div>
-      <textarea id="yaml-text" spellcheck="false"></textarea>
-    </section>
-    <section id="tab-issues" class="tab"></section>
-    <section id="tab-help" class="tab help">
-      <h3>操作</h3>
-      <ul>
-        <li>クリック：枠を選ぶ（いちばん内側の枠）</li>
-        <li>ダブルクリック / Enter：選んだ枠を拡大して表示</li>
-        <li>Esc：親の枠を選ぶ</li>
-        <li>⌘S / Ctrl+S：保存</li>
-      </ul>
-      <h3>考え方</h3>
-      <p>正本はプロジェクトフォルダの <code>layout.yaml</code>。左の「設定」で変えた内容は、その YAML に書き込まれる（「YAML」タブで直接書き換えてもよい）。保存するまでファイルは変わらない。</p>
-      <p>テンプレート（型）の中のノードは、id があればそのスライドの <code>fill</code> に書き込み、id が無ければ型の定義そのものを書き換える（型を使う全ての箇所に効く）。</p>
-      <p>書き方の詳細はリポジトリの README を参照。</p>
-    </section>
+    <section id="global"></section>
+    <section id="node"></section>
   </aside>
   <div class="stage">
     <div class="bar">
@@ -59,14 +36,14 @@
       <div id="crumbs"></div>
       <div class="zoom">
         <button id="btn-focus" disabled title="Enter">選んだ枠を拡大</button>
-        <button id="btn-whole" disabled>全体</button>
+        <button id="btn-whole" disabled>全体を表示</button>
       </div>
     </div>
     <div class="frame-wrap">
       <iframe id="frame" title="プレビュー"></iframe>
       <div id="empty" class="empty">
-        <p>「フォルダを開く」で、<code>layout.yaml</code> のあるプロジェクトフォルダを選んでください。</p>
-        <p>「見本」で、見本のプロジェクトを開けます（読むだけ）。</p>
+        <p>「フォルダを開く」で、スライドの設定ファイル <code>layout.yaml</code> と画像を入れたフォルダを選んでください。<code>layout.yaml</code> が無いフォルダを選ぶと、新しく作ります。</p>
+        <p>「見本」で、見本のスライドを開けます。見本はフォルダに保存できません（保存すると、ファイルをダウンロードします）。</p>
       </div>
     </div>
   </div>
@@ -76,7 +53,7 @@
     <h3>トリミング <small id="crop-src"></small></h3>
     <div id="crop-area"><img id="crop-img" alt=""><div id="crop-rect"><i data-h="nw"></i><i data-h="ne"></i><i data-h="sw"></i><i data-h="se"></i></div></div>
     <div class="crop-tools">
-      <label class="chk"><input type="checkbox" id="crop-lock"> 枠の縦横比に合わせる</label>
+      <label class="chk"><input type="checkbox" id="crop-lock"> 表示する枠と同じ縦横比にする</label>
       <span id="crop-values"></span>
     </div>
     <div class="crop-buttons">

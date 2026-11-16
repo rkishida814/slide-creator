@@ -38,30 +38,15 @@ header {
 main { flex: 1; display: flex; min-height: 0; }
 aside {
   width: 460px; min-width: 360px; display: flex; flex-direction: column;
-  background: var(--panel); border-right: 1px solid var(--line); resize: horizontal; overflow: hidden;
+  background: var(--panel); border-right: 1px solid var(--line); resize: horizontal; overflow: auto;
 }
-.tabs { display: flex; border-bottom: 1px solid var(--line); }
-.tabs button { border: 0; border-radius: 0; flex: 1; padding: 8px 4px; background: none; border-bottom: 2px solid transparent; }
-.tabs button.on { border-bottom-color: var(--accent); font-weight: 600; }
-.tab { display: none; flex: 1; overflow: auto; padding: 10px 12px; min-height: 0; }
-.tab.on { display: block; }
-#tab-yaml.on { display: flex; flex-direction: column; gap: 6px; }
-.yaml-head { display: flex; gap: 8px; align-items: center; }
-#yaml-error { color: var(--err); font-size: 14px; }
-#yaml-text {
-  flex: 1; width: 100%; resize: none; font-family: ui-monospace, Menlo, monospace; font-size: 15px; line-height: 1.5;
-  border: 1px solid var(--line); border-radius: 6px; padding: 8px; tab-size: 2; white-space: pre; overflow: auto;
-}
-.help h3 { margin: 12px 0 4px; font-size: 16px; }
-.help p, .help li { line-height: 1.6; color: #374151; }
+#global, #node { padding: 14px 16px; }
+#global { border-bottom: 1px solid var(--line); }
+aside h2 { font-size: 17px; margin: 0 0 6px; }
+aside .meta { margin: 0 0 6px; color: #374151; }
+aside .warn { margin: 6px 0; padding: 6px 8px; border-radius: 6px; background: #fff7ed; color: var(--warn); font-size: 14px; }
 
 /* 設定欄 */
-.p-head { margin-bottom: 8px; }
-.p-head .path { font-weight: 600; font-size: 17px; word-break: break-all; }
-.p-head .meta { color: var(--muted); margin-top: 2px; }
-.p-target { font-size: 14px; padding: 6px 8px; border-radius: 6px; background: #eef2ff; color: #3730a3; margin: 6px 0; }
-.p-target.shared { background: #fff7ed; color: var(--warn); }
-.p-target a { color: inherit; cursor: pointer; text-decoration: underline; }
 fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 10px 0; padding: 6px 10px 10px; }
 legend { color: var(--muted); padding: 0 4px; }
 .row { display: grid; grid-template-columns: 7.5em 1fr; align-items: center; gap: 6px; margin-top: 6px; }
@@ -70,7 +55,7 @@ legend { color: var(--muted); padding: 0 4px; }
 .row input[type=text], .row input[type=number], .row select, .row textarea {
   width: 100%; min-width: 0; border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; background: #fff;
 }
-.row input[type=number] { width: 5em; flex: none; }
+.row input[type=number] { width: 6.5em; flex: none; }
 .row input[type=color] { width: 34px; height: 30px; padding: 0; border: 1px solid var(--line); border-radius: 4px; flex: none; }
 .row textarea { min-height: 5.5em; resize: vertical; font-family: inherit; }
 .row .hint { color: var(--muted); font-size: 13px; grid-column: 2; margin-top: -2px; }
@@ -79,13 +64,6 @@ legend { color: var(--muted); padding: 0 4px; }
 .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .note { color: var(--muted); font-size: 14px; line-height: 1.5; }
 
-/* 問題 */
-.issue { padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; cursor: pointer; line-height: 1.4; }
-.issue:hover { background: #f3f4f6; }
-.issue b { font-weight: 600; }
-.issue.error b { color: var(--err); }
-.issue.warn b { color: var(--warn); }
-#issue-count { color: var(--err); }
 
 /* 表示 */
 .stage { flex: 1; display: flex; flex-direction: column; min-width: 0; }

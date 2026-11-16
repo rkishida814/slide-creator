@@ -35,7 +35,7 @@ export function layoutDoc(doc, env) {
   const maxIn = 56;
   for (const [name, v] of [['幅', W], ['高さ', H]]) {
     const inch = v / { in: 1, cm: 2.54, mm: 25.4, pt: 72, px: 96 }[unit];
-    if (inch > maxIn) issues.push({ level: 'warn', path: 'canvas', msg: `${name} ${(inch * 2.54).toFixed(1)} cm は PowerPoint の上限 142.24 cm を超える（PPTX は PowerPoint で正しく開けないおそれがある。PDF は出せる）` });
+    if (inch > maxIn) issues.push({ level: 'warn', path: 'canvas', msg: `${name} ${(inch * 2.54).toFixed(1)} cm は、PowerPoint のスライドの上限 142.24 cm を超える。PPTX は PowerPoint で正しく開けないおそれがある（PDF には書き出せる）` });
   }
   const slides = (doc.slides || []).map((slide, i) => {
     const id = slide.id || `s${i + 1}`;
