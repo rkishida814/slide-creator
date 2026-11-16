@@ -5,7 +5,7 @@
   "main": "src/core/layout.js",
   "scripts": {
     "demo": "node examples/make-assets.js && node bin/slide.js check examples/demo && node bin/slide.js export examples/demo",
-    "vendor": "cp node_modules/pptxgenjs/dist/pptxgen.bundle.js web/vendor/ && rm -rf web/vendor/yaml && cp -R node_modules/yaml/browser/dist web/vendor/yaml",
+    "vendor": "cp node_modules/pptxgenjs/dist/pptxgen.bundle.js node_modules/pptxgenjs/LICENSE web/vendor/ && mv web/vendor/LICENSE web/vendor/LICENSE.pptxgenjs && cp node_modules/jszip/LICENSE.markdown web/vendor/LICENSE.jszip.md && cp node_modules/yaml/LICENSE web/vendor/LICENSE.yaml && rm -rf web/vendor/yaml && cp -R node_modules/yaml/browser/dist web/vendor/yaml",
     "serve": "python3 scripts/serve.py 8769"
   },
   "author": "",
