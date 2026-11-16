@@ -3,7 +3,7 @@ import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML } from '../src/core/html.js';
 import { buildPPTX } from '../src/core/pptx.js';
-import { PER_INCH } from '../src/core/units.js';
+import { PER_INCH, toUnit } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
@@ -489,6 +489,8 @@ function renderProps() {
   if (mode === 'shared') el.append(h('p', 'warn', 'この枠は、複数のスライドで共通に使う枠の組み合わせ（テンプレート）の一部です。変えると、このテンプレートを使う全てのスライドが変わります。'));
 
   // 種類
+  const fsSize = sizeFields(box);
+  if (fsSize) el.append(fsSize);
   const fsKind = h('div');
   fsKind.append(
     row('種類', selectEl(KIND_OPTS, box.kind, (v) => changeKind(box, v))),
@@ -630,6 +632,54 @@ function renderGlobal() {
   acts.append(btn('縦と横を入れ替える', () => set([['width', H], ['height', W]])));
   el.append(acts);
   for (const i of S.layout.issues || []) el.append(h('p', 'warn', i.msg));
+}
+
+// 分割の中の枠の大きさ。外側の分割の ratio のうち、この枠の分を書き換える。
+// 数値は比率、"3cm" のような単位付きは固定の長さ（ほかの部分は残りを比率で分ける）
+function sizeFields(box) {
+  const parent = box.parent ? findBox(box.parent) : null;
+  if (!parent || parent.kind !== 'split' || !parent.src) return null;
+  const pn = parent.node || {};
+  const n = (pn.children || []).length;
+  const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
+  const i = sibs.findIndex((b) => b.path === box.path);
+  if (i < 0 || sibs.length !== n) return null;
+  const u = S.layout.unit;
+  const ratio = Array.isArray(pn.ratio) && pn.ratio.length === n ? [...pn.ratio] : Array(n).fill(1);
+  const isLen = (v) => typeof v === 'string';
+  const rows = pn.split === 'rows';
+  const dim = rows ? '高さ' : '幅';
+  const lenOf = (b) => (rows ? b.rect.h : b.rect.w);
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const write = (v) => {
+    ratio[i] = v;
+    edit(parent, 'ratio', ratio);
+  };
+
+  const fs = fieldset('この枠の大きさ');
+  const mode = selectEl([['ratio', '比率で決める'], ['len', '長さで決める']], isLen(ratio[i]) ? 'len' : 'ratio', (v) => {
+    if (v === 'len') return write(`${r3(lenOf(box))}${u}`);
+    // 比率に戻すときは、今の大きさを保つ比にする（比率で決めているほかの部分を基準にする）
+    const j = sibs.findIndex((b, k) => k !== i && !isLen(ratio[k]) && ratio[k] > 0);
+    write(j >= 0 ? r3((lenOf(box) / lenOf(sibs[j])) * ratio[j]) : 1);
+  });
+  let valueIn;
+  let hint;
+  if (isLen(ratio[i])) {
+    valueIn = h2(numEl(r3(toUnit(ratio[i], u)), '', (v) => +v > 0 && write(`${+v}${u}`)), u);
+    hint = `${u} で固定する。ほかの部分は、残りの長さを比率で分ける`;
+  } else {
+    valueIn = numEl(ratio[i], '1', (v) => +v > 0 && write(+v));
+    const shown = ratio.map((v) => (isLen(v) ? v : String(v))).join(' : ');
+    hint = `ほかの部分との比。今は ${shown}`;
+  }
+  if (parent.src.mode === 'shared') fs.append(h('p', 'warn', 'この大きさは、同じテンプレートを使う全てのスライドで共通です。'));
+  fs.append(
+    row(`${dim}の決め方`, mode),
+    row(dim, valueIn, hint),
+    h('div', 'note', `今の${dim} ${fmt(lenOf(box))} ${u}`),
+  );
+  return fs;
 }
 
 function findTemplateName(box) {
