@@ -727,6 +727,112 @@ function commonAncestor(boxes) {
 }
 
 // 分割の一部の部分に背景を付ける。その部分をまとめて 1 つの分割にし、まとめた分割に背景を付ける
+// 選んだ範囲を、置き換えの単位（1 つのボックスか、ある分割の連続した部分）として捉える
+//   { kind: 'node', box }           … その 1 つのボックス（または分割全体）
+//   { kind: 'range', lca, i0, i1 }  … 分割 lca の i0〜i1 番目の部分
+function selectionUnit() {
+  const boxes = (S.sel || []).map(findBox).filter(Boolean);
+  if (!boxes.length) return null;
+  if (boxes.length === 1) return { kind: 'node', box: boxes[0] };
+  const lca = commonAncestor(boxes);
+  if (!lca) return null;
+  const r = selectionRect();
+  const kids = curSlide().boxes.filter((b) => b.parent === lca.path);
+  const covered = kids.map((k, i) => [k, i]).filter(([k]) => overlaps(k.rect, r));
+  if (covered.length === kids.length || lca.kind !== 'split') return { kind: 'node', box: lca };
+  return { kind: 'range', lca, kids, i0: covered[0][1], i1: covered[covered.length - 1][1] };
+}
+
+// YAML に書いてあるとおりの中身（use でテンプレートを呼ぶ枠は展開しない）
+function writtenNode(box) {
+  if (box.src?.mode === 'direct') {
+    const v = getJS(S.files[box.src.file].doc, box.src.path);
+    if (v !== undefined) return structuredClone(v ?? {});
+  }
+  return plain(box.node || {});
+}
+
+// 貼り付けた先で id が重ならないように、中の id を外す
+function stripIds(n) {
+  if (Array.isArray(n)) return n.map(stripIds);
+  if (!n || typeof n !== 'object') return n;
+  const out = {};
+  for (const [k, v] of Object.entries(n)) if (k !== 'id') out[k] = stripIds(v);
+  return out;
+}
+
+function copySelection() {
+  const u = selectionUnit();
+  if (!u) return;
+  const r = selectionRect();
+  let node;
+  if (u.kind === 'node') {
+    node = writtenNode(u.box);
+    if (typeof node === 'string') node = { text: node };
+  } else {
+    const { lca, kids, i0, i1 } = u;
+    const n = kids.length;
+    const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? lca.node.ratio : Array(n).fill(1);
+    node = {
+      split: lca.node.split,
+      ...(lca.node.gap != null ? { gap: lca.node.gap } : {}),
+      ratio: ratio.slice(i0, i1 + 1),
+      children: kids.slice(i0, i1 + 1).map((k) => writtenNode(k)),
+    };
+  }
+  S.clip = { node: stripIds(node), w: r.w, h: r.h, count: (S.sel || []).length };
+  status(`コピーしました（${fmt(r.w)} × ${fmt(r.h)} ${S.layout.unit}）`);
+}
+
+function pasteSelection() {
+  const u = selectionUnit();
+  if (!u || !S.clip) return;
+  const r = selectionRect();
+  const same = (a, b) => Math.abs(a - b) <= Math.max(a, b) * 0.005;
+  const unit = S.layout.unit;
+  if (!same(r.w, S.clip.w) || !same(r.h, S.clip.h)) {
+    return status(`大きさが違うので貼り付けられません（コピーしたもの ${fmt(S.clip.w)} × ${fmt(S.clip.h)} ${unit}、選択中 ${fmt(r.w)} × ${fmt(r.h)} ${unit}）`, true);
+  }
+  const node = structuredClone(S.clip.node);
+  if (u.kind === 'node') {
+    const box = u.box;
+    if (!box.src || box.src.mode !== 'direct') return status('テンプレートの一部には貼り付けられません。', true);
+    const doc = S.files[box.src.file].doc;
+    const cur = getJS(doc, box.src.path);
+    // 貼り付け先の id は残す（CLI やテンプレートの fill が使う名前のため）
+    if (cur && typeof cur === 'object' && cur.id) node.id = cur.id;
+    replaceNode(doc, box.src.path, node);
+    setSel([]);
+    return fileChanged(box.src.file).then(() => status('貼り付けました'));
+  }
+  const done = replaceRange(u.lca, u.kids, u.i0, u.i1, node);
+  if (done && done.then) done.then(() => status('貼り付けました'));
+}
+
+// 分割 lca の i0〜i1 番目を、1 つのノードに置き換える（外側での大きさは、置き換える部分の合計）
+function replaceRange(lca, kids, i0, i1, node) {
+  if (lca.src.mode !== 'direct') return status('テンプレートの一部には貼り付けられません。', true);
+  const doc = S.files[lca.src.file].doc;
+  const path = lca.src.path;
+  const n = kids.length;
+  const children = getJS(doc, [...path, 'children']);
+  if (!Array.isArray(children) || children.length !== n) return status('この範囲には貼り付けられません。', true);
+  const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? [...lca.node.ratio] : Array(n).fill(1);
+  const subR = ratio.slice(i0, i1 + 1);
+  const u = S.layout.unit;
+  const gap = toUnit(lca.node.gap ?? 0, u);
+  let outer;
+  if (subR.every((x) => typeof x === 'number')) outer = subR.reduce((a, x) => a + x, 0);
+  else if (subR.every((x) => typeof x === 'string')) outer = `${Math.round((subR.reduce((a, x) => a + toUnit(x, u), 0) + gap * (subR.length - 1)) * 1000) / 1000}${u}`;
+  else return status('比率と長さが混ざった範囲には貼り付けられません。', true);
+  children.splice(i0, subR.length, node);
+  ratio.splice(i0, subR.length, outer);
+  setProp(doc, path, 'children', children);
+  setProp(doc, path, 'ratio', ratio);
+  setSel([]);
+  return fileChanged(lca.src.file);
+}
+
 function groupWithBackground(lca, kids, i0, i1, bg) {
   if (lca.src.mode !== 'direct') return status('テンプレートの一部なので、この範囲にまとめた背景を付けられません。', true);
   const doc = S.files[lca.src.file].doc;
@@ -871,6 +977,10 @@ function renderGlobal() {
     row('縦横比', ratioIn),
     row('', lockIn),
     row('用紙', paperIn),
+    row('フォント', selectEl(FONT_OPTS, getJS(doc, ['defaults', 'font', 'family']) ?? DEFAULT_FONT, (v) => {
+      setProp(doc, ['defaults'], ['font', 'family'], v);
+      fileChanged('layout.yaml');
+    })),
   );
   body.append(...bgRows(getJS(doc, ['background']), (v) => {
     setProp(doc, [], 'background', v);
@@ -1380,7 +1490,17 @@ function onKey(e) {
     return;
   }
   const tag = (e.target.tagName || '').toLowerCase();
-  if (['input', 'textarea', 'select'].includes(tag)) return;
+  if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
+  if ((e.metaKey || e.ctrlKey) && e.key === 'c' && (S.sel || []).length) {
+    e.preventDefault();
+    copySelection();
+    return;
+  }
+  if ((e.metaKey || e.ctrlKey) && e.key === 'v' && S.clip && (S.sel || []).length) {
+    e.preventDefault();
+    pasteSelection();
+    return;
+  }
   if (e.key === 'Escape') select(null);
 }
 
