@@ -230,6 +230,8 @@ function setupFrame() {
     if (!b) return;
     e.preventDefault();
     drag = { box: b, x: e.clientX, y: e.clientY, moving: false, swap: e.metaKey || e.ctrlKey };
+    // 複数選んだ行（横いっぱい）の中から ⌘ドラッグを始めたら、行ごと入れ替える
+    if (drag.swap && (S.sel || []).length > 1 && S.sel.includes(b.path)) drag.row = rowSwapPlan();
   });
   doc.addEventListener('mousemove', (e) => {
     if (!drag) return hover(leafAt(e));
@@ -240,7 +242,9 @@ function setupFrame() {
     }
     if (!drag.moving) return;
     const t = leafAt(e);
-    if (drag.swap) {
+    if (drag.swap && drag.row) {
+      showDrop(rowDropTarget(drag.row, t));
+    } else if (drag.swap) {
       showDrop(t && canSwap(drag.box, t) ? t : null);
     } else if (t) {
       S.dragSel = rectSelect(drag.box, t);
@@ -255,6 +259,11 @@ function setupFrame() {
     showDrop(null);
     if (!d.moving) return;
     dragged = true;
+    if (d.swap && d.row) {
+      const t = leafAt(e);
+      if (t) swapRows(d.row, t);
+      return;
+    }
     if (d.swap) {
       const t = leafAt(e);
       if (t && t.path !== d.box.path) {
@@ -766,7 +775,7 @@ function splitEntries(lca, selSet) {
   const add = (box, node, r) => {
     const st = state(box);
     if (st !== 'part') {
-      out.push({ node, ratio: r, len: L(box), sel: st === 'all' });
+      out.push({ node, ratio: r, len: L(box), sel: st === 'all', box });
       return true;
     }
     // 一部だけ選んだ部分：同じ向きの分割で、名前・余白・背景などが付いていなければ、中身を展開する
@@ -875,6 +884,58 @@ function isEmptyNode(n) {
 // 選んだ範囲が、上下の並びの中の「横いっぱいの行」になっているかを調べ、複製の段取りを返す。
 // 複製した行の分だけ下のボックスを下にずらし、その分は、下のほうの空きのボックスを縮めて埋める。
 // 空きが足りない（スライドからはみ出す）ときや、行全体を選んでいないときは null
+// 選んだボックスが、上下の並びの中の「横いっぱいの行」になっているとき、その上下の並びを返す
+function rowSplitOf(boxes, selSet) {
+  const slide = curSlide();
+  const full = (b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b)).every((l) => selSet.has(l.path));
+  const isRows = (b) => b && b.kind === 'split' && b.node?.split === 'rows' && b.src;
+  const a = boxes.length === 1 ? boxes[0] : commonAncestor(boxes);
+  if (!a) return null;
+  if (isRows(a) && !full(a)) return a;
+  let x = a;
+  for (;;) {
+    if (!full(x) || !x.parent) return null;
+    const p = findBox(x.parent);
+    if (isRows(p)) return p;
+    x = p;
+  }
+}
+
+// ⌘ドラッグで行を入れ替える段取り：選んだ行（横いっぱい）と、その上下の並びの部分の一覧
+function rowSwapPlan() {
+  const sel = S.sel || [];
+  if (!sel.length) return null;
+  const boxes = sel.map(findBox).filter(Boolean);
+  const selSet = new Set(sel);
+  const R = rowSplitOf(boxes, selSet);
+  if (!R) return null;
+  const r = splitEntries(R, selSet);
+  return r ? { R, r } : null;
+}
+
+// 選んだ行と、t を含む行を入れ替える（行の高さも一緒に動く）
+function swapRows(plan, t) {
+  const { R, r } = plan;
+  const { entries, i0, i1 } = r;
+  const j = entries.findIndex((e) => e.box && within(t, e.box));
+  if (j < 0) return status('この行とは入れ替えられません（同じ上下の並びの中の行に落としてください）。', true);
+  if (j >= i0 && j <= i1) return;
+  const block = entries.slice(i0, i1 + 1);
+  const list = j > i1
+    ? [...entries.slice(0, i0), entries[j], ...entries.slice(i1 + 1, j), ...block, ...entries.slice(j + 1)]
+    : [...entries.slice(0, j), ...block, ...entries.slice(j + 1, i0), entries[j], ...entries.slice(i1 + 1)];
+  return writeEntries(R, list).then(() => status('行を入れ替えました'));
+}
+
+// ドラッグ中、落とす先の行を示す
+function rowDropTarget(plan, t) {
+  if (!t) return null;
+  const e = plan.r.entries.find((x) => x.box && within(t, x.box));
+  if (!e) return null;
+  const k = plan.r.entries.indexOf(e);
+  return k >= plan.r.i0 && k <= plan.r.i1 ? null : e.box;
+}
+
 function dupPlan() {
   const sel = S.sel || [];
   const slide = curSlide();
@@ -884,17 +945,8 @@ function dupPlan() {
   const selSet = new Set(sel);
   const full = (b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b)).every((l) => selSet.has(l.path));
   const isRows = (b) => b && b.kind === 'split' && b.node?.split === 'rows' && b.src;
-  // 行を含む上下の並び R を探す
-  const a = boxes.length === 1 ? boxes[0] : commonAncestor(boxes);
-  if (!a) return null;
-  let R = isRows(a) && !full(a) ? a : null;
-  let x = a;
-  while (!R) {
-    if (!full(x) || !x.parent) return null;
-    const p = findBox(x.parent);
-    if (isRows(p)) R = p;
-    else x = p;
-  }
+  const R = rowSplitOf(boxes, selSet);
+  if (!R) return null;
   // 空きが足りなければ、外側の上下の並びでも探す
   for (let anc = R; isRows(anc); anc = anc.parent ? findBox(anc.parent) : null) {
     const r = splitEntries(anc, selSet);
