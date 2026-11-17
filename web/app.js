@@ -731,6 +731,78 @@ function splitEntries(lca, selSet) {
   return { entries: out, i0, i1, gap, k, u };
 }
 
+// 左右（上下）に並ぶ部分が、どれも同じ位置で上下（左右）に分かれているとき、並びを組み替える。
+// 例：[CA の上下の組, PCA の上下の組, ZPCA の上下の組] を左右に並べたもの
+//   → [上段（CA・PCA・ZPCA を左右に）, 下段（下の空き 3 つを左右に）] を上下に並べたもの。見た目は変わらない
+// 組み替えられないときは null を返す
+function transposeSplit(lca) {
+  if (!lca || lca.kind !== 'split' || !lca.src) return null;
+  const D = lca.node.split;
+  const P = D === 'rows' ? 'cols' : 'rows';
+  const L = (b) => (P === 'rows' ? b.rect.h : b.rect.w);
+  const slide = curSlide();
+  const kids = slide.boxes.filter((b) => b.parent === lca.path);
+  const n = kids.length;
+  const { file, path, mode } = lca.src;
+  const doc = S.files[file].doc;
+  const written = mode === 'direct' ? getJS(doc, [...path, 'children']) : null;
+  const nodes = Array.isArray(written) && written.length === n ? written : plain(lca.node.children || []);
+  const ok = ['split', 'ratio', 'children', 'gap', 'id', 'split_below'];
+  let m = null;
+  let gap0 = null;
+  const subs = [];
+  for (let i = 0; i < n; i++) {
+    const nd = nodes[i];
+    if (!nd || typeof nd !== 'object' || nd.split !== P || !Array.isArray(nd.children)) return null;
+    if (Object.entries(nd).some(([x, v]) => v != null && !ok.includes(x))) return null;
+    const g = toUnit(nd.gap ?? 0, S.layout.unit);
+    if (m == null) {
+      m = nd.children.length;
+      gap0 = g;
+    }
+    if (nd.children.length !== m || Math.abs(g - gap0) > 1e-6) return null;
+    const sb = slide.boxes.filter((b) => b.parent === kids[i].path);
+    if (sb.length !== m) return null;
+    subs.push(sb);
+  }
+  if (!m || m < 2) return null;
+  // 分かれ目の位置がそろっていること
+  for (let i = 1; i < n; i++) for (let j = 0; j < m; j++) if (Math.abs(L(subs[i][j]) - L(subs[0][j])) > 0.02) return null;
+  const r0 = Array.isArray(nodes[0].ratio) && nodes[0].ratio.length === m ? nodes[0].ratio : null;
+  const bands = Array.from({ length: m }, (_, j) => ({
+    split: D,
+    ...(Array.isArray(lca.node.ratio) ? { ratio: plain(lca.node.ratio) } : {}),
+    ...(lca.node.gap != null ? { gap: lca.node.gap } : {}),
+    children: nodes.map((nd) => nd.children[j]),
+  }));
+  const content = { split: P, ...(r0 ? { ratio: r0 } : {}), ...(nodes[0].gap != null ? { gap: nodes[0].gap } : {}), children: bands };
+  if (mode === 'direct') {
+    const cur = getJS(doc, path) || {};
+    const keep = Object.fromEntries(Object.entries(cur).filter(([x]) => !CONTENT_KEYS.includes(x) && x !== 'gap'));
+    replaceNode(doc, path, { ...keep, ...content });
+  } else {
+    setProp(doc, path, 'ratio', null);
+    setProp(doc, path, 'gap', null);
+    for (const [x, v] of Object.entries(content)) setProp(doc, path, x, v);
+  }
+  return fileChanged(file);
+}
+
+// 選んだ範囲がそのままでは扱えないとき、並びを組み替えてから、同じ範囲を選び直して fn をやり直す
+function retryAfterTranspose(lca, fn) {
+  const r = selectionRect();
+  const done = transposeSplit(lca);
+  if (!done) return null;
+  return done.then(() => {
+    const e = 1e-6;
+    const inside = curSlide().boxes.filter((b) => isLeaf(b) && b.rect.x >= r.x - e && b.rect.y >= r.y - e && b.rect.x + b.rect.w <= r.x + r.w + e && b.rect.y + b.rect.h <= r.y + r.h + e);
+    setSel(inside.map((b) => b.path));
+    applyView();
+    renderProps();
+    return fn();
+  });
+}
+
 // 並びを分割 lca に書き戻す。1 つだけになったら、分割をやめてその 1 つを lca の位置に置く
 function writeEntries(lca, list) {
   const { file, path, mode } = lca.src;
@@ -762,7 +834,17 @@ function writeEntries(lca, list) {
 // ほかのボックスの大きさは変えない
 function removeInSplit(lca, selSet) {
   const r = splitEntries(lca, selSet);
-  if (!r) return status('この範囲は削除できません。', true);
+  if (!r) {
+    const again = retryAfterTranspose(lca, () => {
+      S.confirmed = true;
+      try {
+        return removeSelection();
+      } finally {
+        S.confirmed = false;
+      }
+    });
+    return again || status('この範囲は削除できません。', true);
+  }
   // 消す範囲が組（同じ向きの分割）のいちばん下・右で、その組の外側に、見た目ですぐ下・右のボックスがあるときは、
   // 外側の並びで扱い、そのボックスを伸ばす（例：タイトルの下に分けた空きを消すと、さらに下のボックスが上に伸びる）
   if (r.i1 + 1 >= r.entries.length && lca.parent) {
@@ -811,7 +893,7 @@ function removeSelection() {
   }
   const lca = u.kind === 'range' ? u.lca : u.box;
   const boxes = (S.sel || []).map(findBox).filter(Boolean);
-  if (boxes.some(hasContent) && !confirm('選んだボックスと中身を消しますか？')) return;
+  if (boxes.some(hasContent) && !S.confirmed && !confirm('選んだボックスと中身を消しますか？')) return;
   const sel = new Set(S.sel);
   // 分割の中身を全部選んだときは、その分割ごと消す
   const all = curSlide().boxes.filter((b) => isLeaf(b) && within(b, lca)).every((l) => sel.has(l.path));
@@ -834,7 +916,7 @@ function mergeSelection() {
   const order = (b) => slide.boxes.indexOf(b);
   const leaves = (S.sel || []).map(findBox).filter(Boolean).sort((a, b) => order(a) - order(b));
   const filled = leaves.filter((b) => b.kind === 'image' || b.kind === 'text');
-  if (filled.length > 1 && !confirm('内容は、選んだ中でいちばん上か左にあるボックスのものだけを残し、ほかは消します。まとめますか？')) return;
+  if (filled.length > 1 && !S.confirmed && !confirm('内容は、選んだ中でいちばん上か左にあるボックスのものだけを残し、ほかは消します。まとめますか？')) return;
   let node = filled.length ? writtenNode(filled[0]) : {};
   if (typeof node === 'string') node = { text: node };
   delete node.id;
@@ -842,7 +924,17 @@ function mergeSelection() {
   if (!lca.src) return status('このボックスは、まとめられません。', true);
   if (lca.kind === 'split') {
     const r = splitEntries(lca, new Set(S.sel));
-    if (!r) return status('この範囲は、まとめられません。', true);
+    if (!r) {
+      const again = retryAfterTranspose(lca, () => {
+        S.confirmed = true;
+        try {
+          return mergeSelection();
+        } finally {
+          S.confirmed = false;
+        }
+      });
+      return again || status('この範囲は、まとめられません。', true);
+    }
     const { entries, i0, i1, gap, u: unit } = r;
     const part = entries.slice(i0, i1 + 1);
     const ratio = part.every((e) => typeof e.ratio === 'number')
@@ -1169,7 +1261,7 @@ function multiSizeFields(lca, r, all) {
 // 分割 lca の中の選んだ部分を、合計の長さが total になるように長さで固定する
 function setRangeLength(lca, total) {
   const r = splitEntries(lca, new Set(S.sel));
-  if (!r) return status('この範囲の大きさは変えられません。', true);
+  if (!r) return retryAfterTranspose(lca, () => status('並びを組み替えました。もう一度、長さを入れてください。')) || status('この範囲の大きさは変えられません。', true);
   const { entries, i0, i1, gap, u } = r;
   const part = entries.slice(i0, i1 + 1);
   const sum = part.reduce((a, e) => a + e.len, 0);
