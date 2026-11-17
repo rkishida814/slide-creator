@@ -198,3 +198,21 @@ legend { color: var(--muted); padding: 0 4px; }
 
 /* 縦に並ぶボタンは、いちばん長いボタンに幅をそろえる（右端をそろえる） */
 .actions { display: grid; grid-template-columns: max-content; justify-items: stretch; }
+
+/* 設定欄の文字は、少し小さくして欄に収める */
+aside { font-size: 15px; }
+/* 1 行に 2 つの組を並べる行（幅と高さ、揃え方の横と縦など）。行の全幅を半分ずつ使う */
+.row.full { grid-template-columns: minmax(0, 1fr); }
+.pair-line { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; min-width: 0; }
+.pair { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.pair-label { color: #374151; white-space: nowrap; }
+.row .pair input[type=number], .row .pair select { flex: 1 1 0; min-width: 0; width: auto; }
+.pair-unit { white-space: nowrap; }
+/* 設定欄は 420px より狭くしない（項目名の列と入力欄が両方収まる幅） */
+aside { min-width: 420px; }
+/* 2 つの組は、幅が足りなければ 2 行に折り返す */
+.pair-line { display: flex; flex-wrap: wrap; column-gap: 12px; row-gap: 6px; }
+.pair { flex: 1 1 11em; }
+
+/* 数値の欄は 5 文字分にして、同じ行のほかの欄に幅を回す */
+.row input[type=number] { width: 5em; }

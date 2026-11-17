@@ -1403,13 +1403,10 @@ function renderMulti(el) {
       for (const f of files) fileChanged(f);
     };
     const fsP = fieldset('位置（選んだボックスの 1 つずつ）');
-    const vals = h('span', 'in row-line');
-    vals.append(
-      selectEl(H_OPTS, cur('align'), (v) => setAll('align', v)),
-      h('label', null, '縦の位置'),
-      selectEl(V_OPTS, cur('valign'), (v) => setAll('valign', v)),
-    );
-    fsP.append(row('横の位置', vals));
+    fsP.append(fullRow(pairLine(
+      ['横の位置', selectEl(H_OPTS, cur('align'), (v) => setAll('align', v))],
+      ['縦の位置', selectEl(V_OPTS, cur('valign'), (v) => setAll('valign', v))],
+    )));
     el.append(fsP);
   }
   // 余白は、選んだボックスの 1 つずつに同じ値を設定する（値は、いちばん上か左のボックスのものを出す）
@@ -1467,9 +1464,7 @@ function multiSizeFields(lca, r, all) {
       edit(c.p, 'ratio', ratio);
     });
   };
-  const line = h('span', 'in row-line');
-  line.append(dimInput('cols'), u, h('label', null, '高さ'), dimInput('rows'), u);
-  fs.append(row('幅', line));
+  fs.append(fullRow(pairLine(['幅', dimInput('cols'), u], ['高さ', dimInput('rows'), u])));
   return fs;
 }
 
@@ -1880,9 +1875,7 @@ function sizeFields(box) {
     return numEl(val, '', (v) => +v > 0 && write(+v));
   };
   const unitTxt = mode === 'len' ? u : '';
-  const line = h('span', 'in row-line');
-  line.append(dimInput('cols'), unitTxt, h('label', null, '高さ'), dimInput('rows'), unitTxt);
-  fs.append(row('幅', line));
+  fs.append(fullRow(pairLine(['幅', dimInput('cols'), unitTxt], ['高さ', dimInput('rows'), unitTxt])));
   if (shared) fs.append(h('p', 'warn', 'この大きさは、同じテンプレートを使う全てのスライドで共通です。'));
   return fs;
 }
@@ -2036,13 +2029,28 @@ function wrapWhole(text, f) {
 // 揃え方（横）と（縦）を 1 行に
 function alignRow(box, node, inh, hDflt, vDflt) {
   // ほかの行と同じく、名前の列と入力の列に分ける（入力の左端を揃える）
-  const vals = h('span', 'in row-line');
-  vals.append(
-    selectEl(H_OPTS, node.align ?? inh.align ?? hDflt, (v) => edit(box, 'align', v)),
-    h('label', null, '揃え方（縦）'),
-    selectEl(V_OPTS, node.valign ?? inh.valign ?? vDflt, (v) => edit(box, 'valign', v)),
-  );
-  return row('揃え方（横）', vals);
+  return fullRow(pairLine(
+    ['揃え方（横）', selectEl(H_OPTS, node.align ?? inh.align ?? hDflt, (v) => edit(box, 'align', v))],
+    ['揃え方（縦）', selectEl(V_OPTS, node.valign ?? inh.valign ?? vDflt, (v) => edit(box, 'valign', v))],
+  ));
+}
+
+// 1 行に 2 つの組（名前・入力欄・単位）を、同じ幅で並べる。行の全幅を使う（名前の列には入れない）
+function pairLine(a, b) {
+  const line = h('span', 'pair-line');
+  for (const [lab, ctl, unit] of [a, b]) {
+    const p = h('span', 'pair');
+    if (lab) p.append(h('label', 'pair-label', lab));
+    p.append(ctl);
+    if (unit) p.append(h('span', 'pair-unit', unit));
+    line.append(p);
+  }
+  return line;
+}
+function fullRow(content) {
+  const r = h('div', 'row full');
+  r.append(content);
+  return r;
 }
 
 function textFields(box, node, inh) {
