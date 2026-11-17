@@ -1286,7 +1286,7 @@ function paddingRow(box, node, targets) {
     const inp = numEl(same ? v[ks[0]] ?? 0 : '', same ? '0' : '別々', (x) => {
       for (const k of ks) v[k] = x === '' ? 0 : +x;
       write();
-    });
+    }, 0.5);
     pair.append(ic, h('span', 'pad-name', title), inp);
   });
   // 上・右・下・左を別々に変える欄は、折りたたんでおく（上下・左右がそろっていないときは開く）
@@ -1297,7 +1297,7 @@ function paddingRow(box, node, targets) {
     const inp = numEl(v[k] ?? 0, '0', (x) => {
       v[k] = x === '' ? 0 : +x;
       write();
-    });
+    }, 0.5);
     four.append(ic, inp);
   });
   const det = document.createElement('details');
