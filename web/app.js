@@ -469,12 +469,21 @@ function applyView() {
   const offY = H + 2 * m <= fh ? (fh - H) / 2 : m;
   sec.style.transformOrigin = '0 0';
   sec.style.transform = `translate(${offX}px, ${offY}px) scale(${s})`;
-  const space = doc.querySelector('.zoom-space');
-  if (space) Object.assign(space.style, { width: `${Math.max(fw, W + 2 * m)}px`, height: `${Math.max(fh, H + 2 * m)}px` });
   const prev = S.view;
   let sx = S.scroll?.x || 0;
   let sy = S.scroll?.y || 0;
-  if (prev && Math.abs(prev.s - s) > 1e-9) {
+  const t = S.scrollTarget;
+  if (t) {
+    // 虫眼鏡：選んだボックスの左上を、プレビューの左上（余白 m）に置く。右下の端のボックスでも寄せられるよう、スクロールできる広さを足す
+    sx = offX + t.x * ppu * s - m;
+    sy = offY + t.y * ppu * s - m;
+    S.extraSpace = { w: sx + fw, h: sy + fh };
+    S.scrollTarget = null;
+  }
+  const space = doc.querySelector('.zoom-space');
+  const ex = S.extraSpace || { w: 0, h: 0 };
+  if (space) Object.assign(space.style, { width: `${Math.max(fw, W + 2 * m, ex.w)}px`, height: `${Math.max(fh, H + 2 * m, ex.h)}px` });
+  if (!t && prev && Math.abs(prev.s - s) > 1e-9) {
     // 見えている左上の点（スライドの上の位置）を、拡大の前後で同じ場所に置く
     // 左上の角がまだ見えているとき（100% から広げるときなど）は、左上の角から右下へ広げる
     const px = (sx - prev.offX) / prev.s;
@@ -493,6 +502,7 @@ function applyView() {
   selEl.style.background = 'rgba(37, 99, 235, .08)';
   const one = S.selected ? findBox(S.selected) : null;
   $('#btn-split').disabled = !(one && one.src && isLeaf(one));
+  $('#btn-zoom-fit').disabled = !(S.sel || []).length;
   $('#btn-merge').disabled = !((S.sel || []).length > 1 && selectionUnit());
   $('#btn-delete').disabled = !((S.sel || []).length > 1 ? selectionUnit() : one && canRemove(one));
 }
@@ -2071,12 +2081,30 @@ $('#btn-pdf').onclick = exportPDF;
 $('#btn-split').onclick = openSplitDialog;
 $('#btn-merge').onclick = () => mergeSelection();
 $('#btn-delete').onclick = () => removeSelection();
+// 虫眼鏡：選んだボックスを左上に寄せ、いまの縦横比のまま、縦か横がプレビューいっぱいになるまで拡大する（つまみもそこまで動く）
+$('#btn-zoom-fit').onclick = () => {
+  const r = S.dragSel?.rect || selectionRect();
+  const slide = curSlide();
+  if (!r || !slide || !S.ppu) return;
+  const frame = $('#frame');
+  const m = 24;
+  const fw = frame.clientWidth;
+  const fh = frame.clientHeight;
+  const R = slide.rect;
+  const base = Math.min((fw - 2 * m) / (R.w * S.ppu), (fh - 2 * m) / (R.h * S.ppu));
+  const z = Math.min((fw - 2 * m) / (r.w * S.ppu * base), (fh - 2 * m) / (r.h * S.ppu * base));
+  setZoom(Math.max(1, Math.min(8, z)));
+  S.scrollTarget = { x: r.x, y: r.y };
+  applyView();
+};
 $('#zoom').oninput = (e) => {
+  S.extraSpace = null;
   setZoom(+e.target.value / 100);
   applyView();
 };
 $('#btn-whole').onclick = () => {
   setSel([]);
+  S.extraSpace = null;
   setZoom(1);
   applyView();
   renderProps();
