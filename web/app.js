@@ -281,10 +281,10 @@ function setupFrame() {
   doc.addEventListener('keydown', onKey);
   applyView();
   measureOverflow(doc);
-  if (S.pendingFit) {
-    const p = S.pendingFit;
-    S.pendingFit = null;
-    fitTextBelow(p, doc);
+  // 文字の高さに合わせ直すボックスを、1 つずつ処理する（書き換えると描き直され、ここに戻って次を処理する）
+  while (S.pendingFit && S.pendingFit.length) {
+    const p = S.pendingFit.shift();
+    if (fitTextBelow(p, doc)) break;
   }
 }
 
@@ -337,9 +337,30 @@ function fitTextBelow(path, doc) {
     setProp(ydoc, ypath, 'ratio', [len, 1]);
     setProp(ydoc, ypath, 'children', children);
   }
-  // 選択は、文字の入ったボックス（分けた上側）に移す
-  setSel([`${path}.0`]);
+  // 選択は、文字の入ったボックス（分けた上側）に移す（複数選んでいるときは、そのボックスだけを置き換える）
+  setSel((S.sel || []).map((x) => (x === path ? `${path}.0` : x)));
   return fileChanged(file);
+}
+
+// 複数のテキストのボックスに「テキストの下に生じた余白を別のボックスにする」を設定する
+async function setSplitBelowMany(paths, on) {
+  if (on) {
+    const files = new Set();
+    for (const p of paths) {
+      const b = findBox(p);
+      if (!b || !b.src) continue;
+      setProp(S.files[b.src.file].doc, b.src.path, 'split_below', undefined);
+      files.add(b.src.file);
+    }
+    // 描き直したあと、1 つずつ文字の高さに合わせる
+    S.pendingFit = [...paths];
+    for (const f of files) await fileChanged(f);
+    return;
+  }
+  for (const p of paths) {
+    const b = findBox(p);
+    if (b && b.src) await unfitTextBelow(b);
+  }
 }
 
 // 「テキストの下に生じた余白を別のボックスにする」を外したら、下の空きのボックスを消して元の 1 つに戻す
@@ -352,9 +373,10 @@ function unfitTextBelow(box) {
   const ratio0 = parent && Array.isArray(parent.node?.ratio) ? parent.node.ratio : null;
   if (parent && parent.kind === 'split' && parent.node.split === 'rows' && ratio0 && typeof ratio0[i] === 'string' && sibs[i + 1] && sibs[i + 1].kind === 'empty') {
     const keep = parent.path;
+    const before = S.sel || [];
     const p = removeFromParent(parent, [i + 1]);
-    // 1 つに戻ったときは外側の位置に、そうでなければ同じ場所を選んだままにする
-    setSel([sibs.length === 2 ? keep : box.path]);
+    // 1 つに戻ったときは外側の位置に、そうでなければ同じ場所を選んだままにする（ほかに選んでいるボックスはそのまま）
+    setSel(before.map((x) => (x === box.path ? (sibs.length === 2 ? keep : box.path) : x)));
     return p;
   }
   return fileChanged(file);
@@ -1240,6 +1262,14 @@ function renderMulti(el) {
     el.append(fs);
   }
 
+  // テキストのボックスを選んでいれば、「テキストの下に生じた余白を別のボックスにする」を 1 つずつに設定する
+  const texts = boxes.filter((b) => b.kind === 'text' && b.src);
+  if (texts.length) {
+    const fsT = fieldset('テキスト（選んだボックスの 1 つずつ）');
+    const on = texts.every((b) => (b.node || {}).split_below !== false);
+    fsT.append(row('', checkEl('テキストの下に生じた余白を別のボックスにする', on, (x) => setSplitBelowMany(texts.map((b) => b.path), x))));
+    el.append(fsT);
+  }
   // 余白は、選んだボックスの 1 つずつに同じ値を設定する（値は、いちばん上か左のボックスのものを出す）
   const slideBoxes = curSlide().boxes;
   const leaves = boxes.filter((b) => b.src).sort((a, b) => slideBoxes.indexOf(a) - slideBoxes.indexOf(b));
@@ -1782,7 +1812,7 @@ function textFields(box, node, inh) {
   const fs = fieldset(null);
   // 文字の高さが変わりうる書き換えのあとで、下の余白を合わせ直す
   const edit = (b, k, v) => {
-    S.pendingFit = box.path;
+    S.pendingFit = [box.path];
     return editOne(b, k, v);
   };
   const f = node.font || {};
@@ -1794,12 +1824,12 @@ function textFields(box, node, inh) {
       const pairs = [['text', v]];
       if (f.bold) pairs.push([['font', 'bold'], off]);
       if (f.italic) pairs.push([['font', 'italic'], off]);
-      S.pendingFit = box.path;
+      S.pendingFit = [box.path];
       editMany(box, pairs);
     })),
     row('', checkEl('テキストの下に生じた余白を別のボックスにする', node.split_below !== false, (x) => {
       if (x) {
-        S.pendingFit = box.path;
+        S.pendingFit = [box.path];
         return editOne(box, 'split_below', undefined);
       }
       return unfitTextBelow(box);
