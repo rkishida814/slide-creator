@@ -1036,6 +1036,7 @@ function renderMulti(el) {
   const covered = kids.map((k, i) => [k, i]).filter(([k]) => overlaps(k.rect, r));
   const all = covered.length === kids.length;
   if (lca.src.mode === 'shared') el.append(h('p', 'warn', 'このボックスは、複数のスライドで共通に使うボックスの組み合わせ（テンプレート）の一部です。変えると、このテンプレートを使う全てのスライドが変わります。'));
+  el.append(multiSizeFields(lca, r, all));
 
   if (lca.kind === 'split' && covered.length >= 2) {
     const n = kids.length;
@@ -1069,6 +1070,63 @@ function renderMulti(el) {
     fsBg.append(h('p', 'note', '格子の一部のセルには、まとめた背景を付けられません。'));
   }
   el.append(fsBg);
+}
+
+// 複数選んだときの、選んだ範囲全体の幅と高さ。
+// 外側の分割の並ぶ向きで一部を選んだときは、選んだ部分を、合計がその長さになるように長さで固定する（中の比は保つ）。
+// それ以外の向き（と、分割の全部を選んだとき）は、外側の枠そのものの大きさを変える
+function multiSizeFields(lca, r, all) {
+  const u = S.layout.unit;
+  const r3 = (v) => Math.round(v * 1000) / 1000;
+  const fs = fieldset('ボックスの大きさ（選んだ範囲全体）');
+  const dimInput = (dir) => {
+    const cur = dir === 'rows' ? r.h : r.w;
+    if (lca.kind === 'split' && lca.node.split === dir && !all) {
+      return numEl(r3(cur), '', (v) => +v > 0 && setRangeLength(lca, +v));
+    }
+    // 格子の一部のセルを選んだときは、値を出すだけ
+    const c = lca.kind === 'grid' && !all ? null : sizeCtrl(lca, dir);
+    if (!c) {
+      // 外側で分けられていない向きは、値を出すだけ
+      const i = numEl(r3(cur), '', () => {});
+      i.disabled = true;
+      return i;
+    }
+    const n = c.kids.length;
+    const ratio = Array.isArray(c.p.node.ratio) && c.p.node.ratio.length === n ? [...c.p.node.ratio] : Array(n).fill(1);
+    return numEl(r3(cur), '', (v) => {
+      if (!(+v > 0)) return;
+      ratio[c.i] = `${+v}${u}`;
+      keepOneFlexible(ratio, c.i);
+      edit(c.p, 'ratio', ratio);
+    });
+  };
+  const line = h('span', 'in row-line');
+  line.append(dimInput('cols'), u, h('label', null, '高さ'), dimInput('rows'), u);
+  fs.append(row('幅', line));
+  return fs;
+}
+
+// 分割 lca の中の選んだ部分を、合計の長さが total になるように長さで固定する
+function setRangeLength(lca, total) {
+  const r = splitEntries(lca, new Set(S.sel));
+  if (!r) return status('この範囲の大きさは変えられません。', true);
+  const { entries, i0, i1, gap, u } = r;
+  const part = entries.slice(i0, i1 + 1);
+  const sum = part.reduce((a, e) => a + e.len, 0);
+  const inner = total - gap * (part.length - 1);
+  if (!(inner > 0) || !(sum > 0)) return status('この長さにはできません。', true);
+  const list = entries.map((e, i) => (i >= i0 && i <= i1 ? { ...e, ratio: `${round2((e.len * inner) / sum)}${u}` } : { ...e }));
+  // 全部が長さで固定になると、空いた長さを受け取る部分が無くなるので、選んでいない隣を比率に戻す
+  if (list.every((e) => typeof e.ratio === 'string')) {
+    const j = i1 + 1 < list.length ? i1 + 1 : i0 - 1;
+    if (j >= 0) list[j].ratio = 1;
+  }
+  if (entries.length === curSlide().boxes.filter((b) => b.parent === lca.path).length) {
+    // 並びの組み替えが無いときは比率だけを書き換え、選択はそのまま
+    return edit(lca, 'ratio', list.map((e) => e.ratio));
+  }
+  return writeEntries(lca, list);
 }
 
 function commonAncestor(boxes) {
