@@ -394,7 +394,7 @@ function applyView() {
   selEl.style.background = 'rgba(37, 99, 235, .08)';
   const one = S.selected ? findBox(S.selected) : null;
   $('#btn-split').disabled = !(one && one.src && isLeaf(one));
-  $('#btn-delete').disabled = !(one && canRemove(one));
+  $('#btn-delete').disabled = !((S.sel || []).length > 1 ? selectionUnit() : one && canRemove(one));
 }
 
 // クリックした点を含む、いちばん内側のボックス（分割・格子の間の隙間なら null）
@@ -519,21 +519,26 @@ function changeKind(box, kind, imagePath) {
 
 // 枠を n 個に分ける。中身（と揃え方などの設定）は 1 つ目に移し、
 // 枠そのものの設定（id・余白・背景・枠線）は外側に残す。表示の拡大はしない
-const FRAME_KEYS = ['id', 'padding', 'background', 'border'];
+// 外側の枠に残す設定（余白は残さない。外側の枠はクリックで選べず、見えない余白になるため）
+const FRAME_KEYS = ['id', 'background', 'border'];
+const MOVE_TO_CHILD = ['padding', 'background_inset'];
 function splitBox(box, dir, n) {
   const { file, path, mode } = box.src;
   const doc = S.files[file].doc;
   let pn = plain(box.node || {});
   if (typeof pn === 'string') pn = { text: pn };
-  const content = Object.fromEntries(Object.entries(pn || {}).filter(([k]) => !FRAME_KEYS.includes(k)));
+  const content = Object.fromEntries(Object.entries(pn || {}).filter(([k]) => !FRAME_KEYS.includes(k) && !MOVE_TO_CHILD.includes(k)));
+  const pad = pn && typeof pn === 'object' && pn.padding != null ? { padding: pn.padding } : {};
   const hasContent = box.kind !== 'empty';
-  const children = Array.from({ length: n }, (_, i) => (i === 0 && hasContent ? content : {}));
+  // 余白は、分けた内側のボックスの 1 つずつに写す（選べば欄に見え、そこで直せる）
+  const children = Array.from({ length: n }, (_, i) => ({ ...(i === 0 && hasContent ? content : {}), ...structuredClone(pad) }));
   if (mode === 'direct') {
     const cur = getJS(doc, path);
     const keep = cur && typeof cur === 'object' ? Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k))) : {};
     replaceNode(doc, path, { ...keep, split: dir, children });
   } else {
     for (const k of CONTENT_KEYS) setProp(doc, path, k, null);
+    if (pad.padding != null) setProp(doc, path, 'padding', 0);
     setProp(doc, path, 'split', dir);
     setProp(doc, path, 'children', children);
   }
@@ -557,37 +562,57 @@ function removeBox(box) {
   if (!canRemove(box)) return;
   if (hasContent(box) && !confirm('このボックスと中身を消しますか？')) return;
   const parent = findBox(box.parent);
+  const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
+  const i = sibs.findIndex((b) => b.path === box.path);
+  return removeFromParent(parent, [i]);
+}
+
+// 選択中のボックスを消す（ドラッグで複数選んだときも）
+function removeSelection() {
+  const u = selectionUnit();
+  if (!u) return;
+  if (u.kind === 'node') {
+    if (!canRemove(u.box)) return status('このボックスは削除できません（スライド全体のボックスは消せません）', true);
+    return removeBox(u.box);
+  }
+  const boxes = (S.sel || []).map(findBox).filter(Boolean);
+  if (boxes.some(hasContent) && !confirm('選んだボックスと中身を消しますか？')) return;
+  const idx = [];
+  for (let i = u.i0; i <= u.i1; i++) idx.push(i);
+  return removeFromParent(u.lca, idx);
+}
+
+// 分割・格子 parent の idx 番目の部分を消す。分割の中が 1 つだけ残ったら、分割をやめて外側の位置に置く
+function removeFromParent(parent, idx) {
   const listKey = parent.kind === 'split' ? 'children' : 'items';
   const { file, path, mode } = parent.src;
   const doc = S.files[file].doc;
   const pn = parent.node || {};
   const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
-  const i = sibs.findIndex((b) => b.path === box.path);
   // 書いてあるとおりの中身を使う（use でテンプレートを呼んでいる枠を、展開した形で書き直さない）
   const written = mode === 'direct' ? getJS(doc, [...path, listKey]) : null;
-  const list = Array.isArray(written) && written.length === sibs.length ? written : plain(pn[listKey] || []);
-  list.splice(i, 1);
-  const ratio = Array.isArray(pn.ratio) && pn.ratio.length === sibs.length ? [...pn.ratio] : null;
-  if (ratio) ratio.splice(i, 1);
+  const all = Array.isArray(written) && written.length === sibs.length ? written : plain(pn[listKey] || []);
+  const drop = new Set(idx);
+  const list = all.filter((_, k) => !drop.has(k));
+  const ratio0 = Array.isArray(pn.ratio) && pn.ratio.length === sibs.length ? pn.ratio : null;
+  const ratio = ratio0 ? ratio0.filter((_, k) => !drop.has(k)) : null;
+  if (!list.length) return status('全部は削除できません。1 つ以上残してください', true);
 
   if (parent.kind === 'split' && list.length === 1 && mode === 'direct') {
-    // 残った 1 つを外側の枠の位置に戻す（外側の id・余白・背景・枠線は残す）
+    // 残った 1 つを外側の位置に戻す（外側の名前・背景・枠線は残す）
     const cur = getJS(doc, path) || {};
     const keep = Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k)));
     let child = list[0];
     if (typeof child === 'string') child = { text: child };
     replaceNode(doc, path, { ...(child || {}), ...keep });
   } else {
-    const seq = doc.getIn([...path, listKey], true);
-    if (mode === 'direct' && YAML.isSeq(seq) && seq.items.length === sibs.length) {
-      seq.items.splice(i, 1);
-      if (ratio) setProp(doc, path, 'ratio', ratio);
-    } else {
-      setProp(doc, path, listKey, list);
-      if (ratio) setProp(doc, path, 'ratio', ratio);
+    setProp(doc, path, listKey, list);
+    if (ratio) {
+      keepOneFlexible(ratio, 0);
+      setProp(doc, path, 'ratio', ratio);
     }
   }
-  S.selected = null;
+  setSel([]);
   return fileChanged(file);
 }
 
@@ -1747,10 +1772,7 @@ $('#btn-save').onclick = save;
 $('#btn-pptx').onclick = exportPPTX;
 $('#btn-pdf').onclick = exportPDF;
 $('#btn-split').onclick = openSplitDialog;
-$('#btn-delete').onclick = () => {
-  const box = S.selected ? findBox(S.selected) : null;
-  if (box) removeBox(box);
-};
+$('#btn-delete').onclick = () => removeSelection();
 $('#zoom').oninput = (e) => {
   setZoom(+e.target.value / 100);
   applyView();

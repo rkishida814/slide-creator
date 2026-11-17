@@ -18,17 +18,17 @@ export function stringify(doc) {
 // 値を YAML のノードにする。数値・文字の配列（ratio, crop, padding）は [a, b] の形で書く
 function toNode(doc, value) {
   if (Array.isArray(value) && value.every((v) => v == null || typeof v !== 'object')) {
-    const n = doc.createNode(value);
+    const n = doc.createNode(value, { aliasDuplicateObjects: false });
     n.flow = true;
     return n;
   }
   if (value && typeof value === 'object' && !Array.isArray(value)) {
-    const n = doc.createNode(value);
+    const n = doc.createNode(value, { aliasDuplicateObjects: false });
     // 小さい対応表（font など）は { } の形で 1 行に書く
     if (Object.values(value).every((v) => v == null || typeof v !== 'object') && Object.keys(value).length <= 4) n.flow = true;
     return n;
   }
-  return doc.createNode(value);
+  return doc.createNode(value, { aliasDuplicateObjects: false });
 }
 
 // path の位置がノード（対応表）でなければ、対応表に直す。文字だけのノードは { text: … } にする
@@ -37,9 +37,9 @@ function ensureMap(doc, path) {
   const cur = doc.getIn(path, true);
   if (YAML.isMap(cur)) return;
   if (cur == null || (YAML.isScalar(cur) && cur.value == null)) {
-    doc.setIn(path, doc.createNode({}));
+    doc.setIn(path, doc.createNode({}, { aliasDuplicateObjects: false }));
   } else if (YAML.isScalar(cur)) {
-    doc.setIn(path, doc.createNode({ text: cur.value }));
+    doc.setIn(path, doc.createNode({ text: cur.value }, { aliasDuplicateObjects: false }));
   }
 }
 
@@ -64,7 +64,7 @@ export function setProp(doc, path, key, value) {
   if (keys.length > 1) {
     const parentPath = [...path, ...keys.slice(0, -1)];
     const parent = doc.getIn(parentPath, true);
-    if (!YAML.isMap(parent)) doc.setIn(parentPath, doc.createNode({}));
+    if (!YAML.isMap(parent)) doc.setIn(parentPath, doc.createNode({}, { aliasDuplicateObjects: false }));
   }
   doc.setIn(full, toNode(doc, value));
 }
