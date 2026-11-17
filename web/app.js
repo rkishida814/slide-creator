@@ -1387,6 +1387,31 @@ function renderMulti(el) {
     fsI.append(acts);
     el.append(fsI);
   }
+  // 横の位置・縦の位置を、選んだボックス（テキスト・画像）の 1 つずつに設定する（値は、いちばん上か左のボックスのものを出す）
+  const posBoxes = boxes.filter((b) => (b.kind === 'text' || b.kind === 'image' || b.kind === 'empty') && b.src)
+    .sort((a, b) => curSlide().boxes.indexOf(a) - curSlide().boxes.indexOf(b));
+  if (posBoxes.length) {
+    const f0 = posBoxes[0];
+    const dflt = (b, key) => (b.kind === 'image' ? (key === 'align' ? 'center' : 'middle') : key === 'align' ? 'left' : 'top');
+    const cur = (key) => (f0.node || {})[key] ?? (f0.inherited || {})[key] ?? dflt(f0, key);
+    const setAll = (key, v) => {
+      const files = new Set();
+      for (const b of posBoxes) {
+        setProp(S.files[b.src.file].doc, b.src.path, key, v);
+        files.add(b.src.file);
+      }
+      for (const f of files) fileChanged(f);
+    };
+    const fsP = fieldset('位置（選んだボックスの 1 つずつ）');
+    const vals = h('span', 'in row-line');
+    vals.append(
+      selectEl(H_OPTS, cur('align'), (v) => setAll('align', v)),
+      h('label', null, '縦の位置'),
+      selectEl(V_OPTS, cur('valign'), (v) => setAll('valign', v)),
+    );
+    fsP.append(row('横の位置', vals));
+    el.append(fsP);
+  }
   // 余白は、選んだボックスの 1 つずつに同じ値を設定する（値は、いちばん上か左のボックスのものを出す）
   const slideBoxes = curSlide().boxes;
   const leaves = boxes.filter((b) => b.src).sort((a, b) => slideBoxes.indexOf(a) - slideBoxes.indexOf(b));
