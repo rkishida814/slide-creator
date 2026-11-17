@@ -496,14 +496,14 @@ function plain(node) {
 
 const CONTENT_KEYS = ['split', 'children', 'ratio', 'grid', 'items', 'image', 'crop', 'text'];
 
-function changeKind(box, kind) {
+function changeKind(box, kind, imagePath) {
   const { file, path, mode } = box.src;
   const doc = S.files[file].doc;
   const fresh = {
     empty: {},
     split: { split: 'rows', children: [{}, {}] },
     grid: { grid: { rows: 2, cols: 2 }, items: [{}, {}, {}, {}] },
-    image: { image: S.assets[0] || 'assets/' },
+    image: { image: imagePath || S.assets[0] || '' },
     text: { text: '' },
   }[kind];
   if (mode === 'direct') {
@@ -656,7 +656,14 @@ function renderProps() {
   // 種類
   const fsSize = sizeFields(box);
   if (fsSize) el.append(fsSize);
-  if (isLeaf(box)) el.append(row('内容', selectEl(KIND_OPTS, kind, (v) => v !== kind && changeKind(box, v))));
+  if (isLeaf(box)) {
+    el.append(row('内容', selectEl(KIND_OPTS, kind, (v) => {
+      if (v === kind) return;
+      // 画像にするとき、フォルダに画像が無ければファイルを選ぶ画面を出す
+      if (v === 'image' && !S.assets.length) return pickImageFile().then((path) => (path ? changeKind(box, v, path) : renderProps()));
+      changeKind(box, v);
+    })));
+  }
 
   // 中身
   if (box.kind === 'image') el.append(imageFields(box, node, inh));
@@ -1119,10 +1126,11 @@ function gridFields(box, node) {
 
 function imageFields(box, node, inh) {
   const fs = fieldset(null);
-  const opts = [...new Set([...S.assets, String(node.image)])].map((a) => [a, a]);
-  const srcIn = S.assets.length
-    ? selectEl(opts, String(node.image), (v) => edit(box, 'image', v))
-    : textEl(String(node.image), 'assets/xxx.png', (v) => edit(box, 'image', v));
+  const opts = [...new Set([...S.assets, String(node.image)])].map((a) => [a, a.split('/').pop()]);
+  const srcIn = h2(
+    selectEl(opts, String(node.image), (v) => edit(box, 'image', v)),
+    pickBtn((path) => edit(box, 'image', path)),
+  );
   const el = S.layout && curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
   const crop = node.crop || [0, 0, 1, 1];
   const cropIns = crop.map((c, i) =>
@@ -1200,7 +1208,10 @@ function textFields(box, node, inh) {
     row('大きさ', h2(numEl(f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, ['font', 'size'], +v)), 'pt')),
     row('フォント', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
     row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
-    row('見出しアイコン', selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined))),
+    row('見出しアイコン', h2(
+      selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a.split('/').pop()])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined)),
+      pickBtn((path) => edit(box, 'icon', path)),
+    )),
     ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, 'icon_size', +v)), 'pt'))] : []),
     alignRow(box, node, inh, 'left', 'top'),
     row('行間', h2(numEl(node.line_height ?? inh.line_height ?? 1.2, '', (v) => +v > 0 && edit(box, 'line_height', +v), 0.05), '倍')),
@@ -1211,6 +1222,55 @@ function textFields(box, node, inh) {
 
 
 // ---------------------------------------------------------------- 部品
+
+// 「ファイルから選ぶ…」：Finder で画像を選び、layout.yaml と同じフォルダに写してから使う
+function pickBtn(onPicked) {
+  const b = btn('ファイルから選ぶ…', async () => {
+    const path = await pickImageFile();
+    if (!path) return;
+    await onPicked(path);
+    if (S.pickMsg) status(S.pickMsg); // 描き直しで消えないよう、書き換えの後に出す
+  });
+  b.className = 'pick-btn';
+  return b;
+}
+
+async function pickImageFile() {
+  if (!S.source?.writable) {
+    status('画像は、フォルダを開いているときだけ足せます', true);
+    return null;
+  }
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/gif,image/svg+xml,image/webp';
+  const file = await new Promise((res) => {
+    input.onchange = () => res(input.files[0] || null);
+    input.addEventListener('cancel', () => res(null));
+    input.click();
+  });
+  if (!file) return null;
+  const name = file.name.replace(/[\\/:*?"<>|]/g, '_');
+  const m = name.match(/^(.*?)(\.[^.]+)?$/);
+  let path = name;
+  for (let k = 1; await S.source.exists(path); k++) {
+    // 同じ名前で中身も同じなら、写さずにそのまま使う
+    const old = await S.source.readBlob(path);
+    if (old.size === file.size && (await old.arrayBuffer().then((a) => new Uint8Array(a).join())) === (await file.arrayBuffer().then((a) => new Uint8Array(a).join()))) {
+      S.pickMsg = `${path} を使います`;
+      return path;
+    }
+    path = `${m[1]}_${k}${m[2] || ''}`;
+  }
+  try {
+    await S.source.writeFile(path, file);
+  } catch (e) {
+    status(`画像をフォルダに入れられません: ${e.message}`, true);
+    return null;
+  }
+  if (!S.assets.includes(path)) S.assets.push(path);
+  S.pickMsg = `画像 ${path} をフォルダに入れました`;
+  return path;
+}
 
 // テキストの欄。ドラッグで選んだ範囲を、ボタンで太字・斜体・上付き・下付きにする。
 // Enter は段落の区切り（行末に ¶）、Shift+Enter は段落の中の改行（↵）。
@@ -1355,19 +1415,16 @@ function bgRows(cur, write) {
     row('背景', selectEl(BG_OPTS, kind, (v) => {
       if (v === '') return write(undefined);
       if (v === 'color') return write(typeof cur === 'string' ? cur : cur?.color || '#ffffff');
-      const image = (typeof cur === 'object' && cur?.image) || S.assets[0];
-      if (!image) {
-        status('フォルダに画像がありません', true);
-        return renderProps();
-      }
       const keep = typeof cur === 'object' && cur ? cur : {};
-      write({ ...keep, image, mode: 'tile' });
+      const image = (typeof cur === 'object' && cur?.image) || S.assets[0];
+      if (image) return write({ ...keep, image, mode: 'tile' });
+      pickImageFile().then((path) => (path ? write({ ...keep, image: path, mode: 'tile' }) : renderProps()));
     })),
   ];
   if (kind === 'color') rows.push(row('色', colorEl(typeof cur === 'string' ? cur : cur.color, (v) => write(v || undefined))));
   if (kind === 'tile') {
-    const opts = [...new Set([...S.assets, cur.image])].map((a) => [a, a]);
-    rows.push(row('画像', selectEl(opts, cur.image, (v) => write({ ...cur, image: v }))));
+    const opts = [...new Set([...S.assets, cur.image])].map((a) => [a, a.split('/').pop()]);
+    rows.push(row('画像', h2(selectEl(opts, cur.image, (v) => write({ ...cur, image: v })), pickBtn((path) => write({ ...cur, image: path })))));
     if (cur.mode !== 'cover') {
       const u = S.layout.unit;
       const nat = S.imageSizes.get(cur.image);

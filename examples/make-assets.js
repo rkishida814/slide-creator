@@ -51,7 +51,7 @@ function sample(w, h, base) {
   });
 }
 
-const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'demo', 'assets');
+const dir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'demo');
 fs.mkdirSync(dir, { recursive: true });
 const specs = [
   ['a1.png', 1200, 900, [220, 90, 80]],

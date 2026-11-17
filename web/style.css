@@ -173,3 +173,6 @@ legend { color: var(--muted); padding: 0 4px; }
 .toast[hidden] { display: none; }
 /* 幅と高さの行 */
 .row .row-line input[type=number] { width: 4.6em; }
+
+/* ファイルから選ぶ */
+.pick-btn { flex: none; white-space: nowrap; padding: 4px 8px; font-size: 14px; }

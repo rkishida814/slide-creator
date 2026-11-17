@@ -7,7 +7,7 @@ import { loadProject, findTarget, LAYOUT_FILE } from '../src/node/project.js';
 
 const HELP = `slide-creator
 
-  slide init <dir>                     新しいプロジェクト（layout.yaml と assets/）を作る
+  slide init <dir>                     新しいプロジェクト（layout.yaml）を作る
   slide tree <dir> [--slide ID] [--json]
                                        ノードの木と、各枠の位置・大きさ（キャンバスの単位）を表示
   slide check <dir>                    設定の誤り・画像の解像度・文字のはみ出しを検査
@@ -68,7 +68,7 @@ async function main() {
   if (cmd === 'init') {
     if (fs.existsSync(path.join(dir, LAYOUT_FILE))) throw new Error(`${dir}/${LAYOUT_FILE} はすでにあります`);
     const here = path.dirname(fileURLToPath(import.meta.url));
-    fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+    fs.mkdirSync(dir, { recursive: true });
     fs.copyFileSync(path.join(here, '..', 'templates', 'init.yaml'), path.join(dir, LAYOUT_FILE));
     return console.log(`作成: ${path.join(dir, LAYOUT_FILE)}`);
   }

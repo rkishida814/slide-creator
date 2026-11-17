@@ -21,7 +21,7 @@ PDF と PNG は Chrome で描く。見つからないときは環境変数 `SLID
 ```
 my-poster/
   layout.yaml     ← どこに何を置くか（正本）
-  assets/         ← 画像（png / jpg / gif / svg。TIFF はブラウザで描けないので PNG にする）
+  a.png, b.jpg …  ← 画像（layout.yaml と同じフォルダに置く。png / jpg / gif / svg。TIFF はブラウザで描けないので PNG にする）
   templates/      ← 使い回す型（任意。ファイル名が型の名前）
   out/            ← 書き出し先（自動）
 ```
@@ -86,17 +86,17 @@ slides:
 | | `ratio: [1, 2]` | 比率。`"3cm"` のような長さを混ぜると、その子は固定長になり、残りを比率で分ける。省略すると等分 |
 | | `gap: 0.3` | 子と子の間隔 |
 | 格子 | `grid: {rows: 2, cols: 3, gap: 0.2}`、`items: [...]` | 同じ大きさのセルに、行ごとに詰める（`order: col` で列ごと）。`gap: [行間, 列間]` も可 |
-| 画像 | `image: assets/a.png` | |
+| 画像 | `image: a.png` | |
 | | `crop: [左, 上, 右, 下]` | 元画像に対する割合（0〜1）。`[0.1, 0, 0.9, 1]` は左右10%ずつ切る |
 | | `fit: contain / cover / stretch` | contain は切らずに収める、cover は枠いっぱいにしてはみ出しを切る、stretch は伸ばす |
-| 文字 | `text: "1行目\n2行目"` | `font: {size, bold, italic, color, family}`、`line_height: 1.2`。文字の左に見出しアイコンを置くときは `icon: assets/x.png`（高さは `icon_size` で pt。省くと文字の大きさ）。文字の一部の飾りは `<b>太字</b>` `<i>斜体</i>` `<sup>上付き</sup>` `<sub>下付き</sub>`（例：`mm<sup>2</sup>`）。改行（`\n`）は段落の区切りで、`para_space`（pt）の間隔が足される。段落の中の改行は `<br>`（行間だけ） |
+| 文字 | `text: "1行目\n2行目"` | `font: {size, bold, italic, color, family}`、`line_height: 1.2`。文字の左に見出しアイコンを置くときは `icon: x.png`（高さは `icon_size` で pt。省くと文字の大きさ）。文字の一部の飾りは `<b>太字</b>` `<i>斜体</i>` `<sup>上付き</sup>` `<sub>下付き</sub>`（例：`mm<sup>2</sup>`）。改行（`\n`）は段落の区切りで、`para_space`（pt）の間隔が足される。段落の中の改行は `<br>`（行間だけ） |
 | 空き | 何も書かない（`{}` や `~`） | |
 
 どのノードにも書けるもの：
 
 - `id`：名前。CLI で `--node photos` や `s1/photos` と指定できる。テンプレートの差し込み口にもなる
 - `padding`：余白。`background_inset: true` なら、背景と枠線も余白の分だけ内側に縮める。`1` / `[上下, 左右]` / `[上, 右, 下, 左]`
-- `background`：色なら `"#RRGGBB"`。画像なら `{image: assets/x.png, mode: tile（並べる）| cover（広げる）, tile: 模様 1 つの幅, color: 下地の色}`。文書の一番上に書くと全スライドの背景になる（スライドごとの `background` が優先）
+- `background`：色なら `"#RRGGBB"`。画像なら `{image: x.png, mode: tile（並べる）| cover（広げる）, tile: 模様 1 つの幅, color: 下地の色}`。文書の一番上に書くと全スライドの背景になる（スライドごとの `background` が優先）
 - `border: {width: 1 (pt), color: "#RRGGBB"}`
 
 ### 引き継ぐ設定
@@ -123,7 +123,7 @@ slides:
     use: photos_and_note    # 型を使う
     fill:                   # id ごとに中身を入れる（その id のノードの設定を上書き）
       title: {text: "結果"}
-      photos: {items: [{image: assets/a1.png}, {image: assets/a2.png}]}
+      photos: {items: [{image: a1.png}, {image: a2.png}]}
 ```
 
 `use` はノードの途中にも書ける（型の中に型を入れてもよい）。`use` と `fill` 以外のキー（`padding` など）は型の根を上書きする。
