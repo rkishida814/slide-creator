@@ -2,7 +2,7 @@
 canvas: {width: 32, height: 18, unit: cm}   # 16:9
 
 defaults:
-  font: {size: 24, family: Helvetica, family_ja: BIZ UDPゴシック}
+  font: {size: 24, family: Helvetica, family_ja: BIZ UDゴシック}
 
 slides:
   - id: s1

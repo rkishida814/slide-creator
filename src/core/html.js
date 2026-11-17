@@ -5,13 +5,15 @@ import { richToHTML, paragraphs } from './richtext.js';
 // フォントは、英数字（英語）用と日本語用を別々に選ぶ（font.family と font.family_ja）。
 // 日本語の字（かな・漢字・全角の記号）は日本語用、それ以外は英語用のフォントで書く。PPTX でも同じに分ける
 export const DEFAULT_FONT = 'Helvetica';
-export const DEFAULT_FONT_JA = 'BIZ UDPゴシック';
-export const JA_FONTS = ['BIZ UDPゴシック', 'ヒラギノ角ゴシック', 'Noto Sans JP', 'メイリオ'];
+export const DEFAULT_FONT_JA = 'BIZ UDゴシック';
+export const JA_FONTS = ['BIZ UDゴシック', 'ヒラギノ角ゴシック', 'Noto Sans JP', 'メイリオ'];
 // 英語用には、日本語のフォントも選べる（Helvetica・Arial・Times New Roman は英語用だけ）
 export const FONTS = [...JA_FONTS, 'Helvetica', 'Arial', 'Times New Roman'];
 // css：ブラウザで使う名前、pptx：PowerPoint に書く名前、web：手元に無いとき Google Fonts から読み込む名前
 const FONT_DEF = {
   // PowerPoint に書く名前は英語の名前にする（Mac で Google Fonts から入れたものも、Windows に入っているものも、この名前で見つかる）
+  'BIZ UDゴシック': { css: `'BIZ UDGothic', 'BIZ UDゴシック'`, pptx: 'BIZ UDGothic', web: 'BIZ+UDGothic' },
+  // 前の版の既定（選択肢には出さない。すでに書いてあるファイルのため）
   'BIZ UDPゴシック': { css: `'BIZ UDPGothic', 'BIZ UDPゴシック'`, pptx: 'BIZ UDPGothic', web: 'BIZ+UDPGothic' },
   'ヒラギノ角ゴシック': { css: `'Hiragino Sans', 'Hiragino Kaku Gothic ProN'`, pptx: 'Hiragino Sans' },
   'Noto Sans JP': { css: `'Noto Sans JP'`, pptx: 'Noto Sans JP', web: 'Noto+Sans+JP' },

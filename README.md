@@ -75,7 +75,7 @@ node bin/slide.js export my-poster                     # PPTX と PDF（--pptx /
 ```yaml
 canvas: {width: 32, height: 18, unit: cm}   # 1枚の大きさ。unit は cm / mm / in / pt / px
 defaults:                                          # 全体の既定（下の「引き継ぐ設定」）
-  font: {size: 24, family: Helvetica, family_ja: BIZ UDPゴシック}
+  font: {size: 24, family: Helvetica, family_ja: BIZ UDゴシック}
 check: {min_dpi: 150}                              # これ未満の画像を警告
 templates: {...}                                   # この文書の中だけで使う型（templates/ フォルダと同じ形）
 
@@ -150,13 +150,13 @@ slides:
 - PPTX を PowerPoint で手直ししても、`layout.yaml` には戻らない。正本は常に設定ファイル
 - 文字の折り返しとはみ出しの判定は Chrome で測る。PowerPoint とはフォントの寸法が少し違うため、ぎりぎりの枠では PPTX 側だけはみ出すことがある
 - フォントは英語用（`font.family`）と日本語用（`font.family_ja`）を別々に選ぶ。日本語の字（かな・漢字・全角の記号）は日本語用、それ以外（英数字など）は英語用のフォントで書く。PPTX でも同じに分けて書く（英語用は latin、日本語用は ea）
-  - 英語用：BIZ UDPゴシック・ヒラギノ角ゴシック・Noto Sans JP・メイリオ・Helvetica・Arial・Times New Roman（既定は Helvetica）
-  - 日本語用：BIZ UDPゴシック・ヒラギノ角ゴシック・Noto Sans JP・メイリオ（既定は BIZ UDPゴシック）
-  - PPTX にはフォントそのものは入らない。開く PC にそのフォントが無いと、別のフォントに置き換わる（BIZ UDPゴシック・メイリオは Windows に標準で入っている。ヒラギノ角ゴシックは Mac だけ。Helvetica は Windows では Arial などに置き換わることがある）
+  - 英語用：BIZ UDゴシック・ヒラギノ角ゴシック・Noto Sans JP・メイリオ・Helvetica・Arial・Times New Roman（既定は Helvetica）
+  - 日本語用：BIZ UDゴシック・ヒラギノ角ゴシック・Noto Sans JP・メイリオ（既定は BIZ UDゴシック）
+  - PPTX にはフォントそのものは入らない。開く PC にそのフォントが無いと、別のフォントに置き換わる（BIZ UDゴシック・メイリオは Windows に標準で入っている。ヒラギノ角ゴシックは Mac だけ。Helvetica は Windows では Arial などに置き換わることがある）
 - EXIF の回転情報付きの写真は、縦横を入れ替えて計算するが、PPTX での表示は未確認
 - 図形・矢印・表・箇条書きの書式（字下げ）は未対応
 - PPTX の「画像を並べる」背景は、画像を 96 dpi とみなして並べる倍率を決めている。PowerPoint で開いた見え方は未確認
-- BIZ UDPゴシックと Noto Sans JP は、プレビューと PDF では Google Fonts から読み込む（PDF は読み込み終えてから書き出すので、フォントごと入る）。PPTX には英語の名前（BIZ UDPGothic）で書く。PowerPoint では、その PC に入っているときだけ同じ字形になる
+- BIZ UDゴシックと Noto Sans JP は、プレビューと PDF では Google Fonts から読み込む（PDF は読み込み終えてから書き出すので、フォントごと入る）。PPTX には英語の名前（BIZ UDGothic）で書く。PowerPoint では、その PC に入っているときだけ同じ字形になる
 - ブラウザ版で設定欄から書き換えると、YAML の `{a: 1}` が `{ a: 1 }` のように書き直される（意味は同じ）
 
 ## 構成
