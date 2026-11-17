@@ -185,3 +185,8 @@ legend { color: var(--muted); padding: 0 4px; }
 .row { grid-template-columns: var(--label-w, 7.5em) minmax(0, 1fr); }
 .row .pad4 { display: flex; align-items: center; min-width: 0; }
 .row .pad4 input[type=number] { flex: 1 1 0; min-width: 0; width: auto; }
+
+/* 余白：上下・左右の欄と、上・右・下・左を別々に設定する折りたたみ */
+.pad4 .pad-name { color: var(--muted); font-size: 14px; margin-right: 2px; white-space: nowrap; }
+.pad-detail summary { cursor: pointer; color: var(--muted); font-size: 14px; }
+.pad-detail .pad4 { margin-top: 4px; }

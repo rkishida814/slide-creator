@@ -1031,22 +1031,46 @@ function paddingRow(box, node, targets) {
     }
     return Promise.all([...files].map((f) => fileChanged(f)));
   };
-  const wrap = h('span', 'in pad4');
+  const write = () => {
+    const a = v.map((y) => +y || 0);
+    writeAll('padding', (t) => padValue(t, a));
+  };
+  // ふだんは、上下と左右を 1 つずつの欄で同時に変える
+  const pair = h('span', 'in pad4');
+  [['↕', '上下', [0, 2]], ['↔', '左右', [1, 3]]].forEach(([icon, title, ks]) => {
+    const ic = h('span', 'pad-ic', icon);
+    ic.title = title;
+    const same = v[ks[0]] === v[ks[1]];
+    const inp = numEl(same ? v[ks[0]] ?? 0 : '', same ? '0' : '別々', (x) => {
+      for (const k of ks) v[k] = x === '' ? 0 : +x;
+      write();
+    });
+    pair.append(ic, h('span', 'pad-name', title), inp);
+  });
+  // 上・右・下・左を別々に変える欄は、折りたたんでおく（上下・左右がそろっていないときは開く）
+  const four = h('span', 'in pad4');
   [['↑', '上'], ['→', '右'], ['↓', '下'], ['←', '左']].forEach(([icon, title], k) => {
     const ic = h('span', 'pad-ic', icon);
     ic.title = title;
     const inp = numEl(v[k] ?? 0, '0', (x) => {
       v[k] = x === '' ? 0 : +x;
-      const a = v.map((y) => +y || 0);
-      writeAll('padding', (t) => padValue(t, a));
+      write();
     });
-    wrap.append(ic, inp);
+    four.append(ic, inp);
   });
-  const r = row('余白', wrap);
+  const det = document.createElement('details');
+  det.className = 'pad-detail';
+  det.open = S.padOpen || v[0] !== v[2] || v[1] !== v[3];
+  det.ontoggle = () => (S.padOpen = det.open);
+  const sum = document.createElement('summary');
+  sum.textContent = '上・右・下・左を別々に設定する';
+  det.append(sum, four);
+  const r = row('余白', pair);
+  const rd = row('', det);
   const inset = checkEl('背景ごと余白を設ける', !!node.background_inset, (x) => writeAll('background_inset', () => x || undefined));
   const r2 = row('', inset);
   const both = h('div');
-  both.append(r, r2);
+  both.append(r, rd, r2);
   return both;
 }
 
