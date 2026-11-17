@@ -847,16 +847,55 @@ function removeInSplit(lca, selSet) {
   }
   // 消す範囲が組（同じ向きの分割）のいちばん下・右で、その組の外側に、見た目ですぐ下・右のボックスがあるときは、
   // 外側の並びで扱い、そのボックスを伸ばす（例：タイトルの下に分けた空きを消すと、さらに下のボックスが上に伸びる）
-  if (r.i1 + 1 >= r.entries.length && lca.parent) {
-    const up = findBox(lca.parent);
-    if (up && up.kind === 'split' && up.src && up.node.split === lca.node.split) {
-      const r2 = splitEntries(up, selSet);
-      if (r2 && r2.i1 + 1 < r2.entries.length) return removeInSplit(up, selSet);
-    }
-  }
   const { entries, i0, i1, gap, k, u } = r;
   const rest = entries.filter((_, i) => i < i0 || i > i1);
   if (!rest.length) return status('全部は削除できません。1 つ以上残してください', true);
+  if (i1 + 1 >= entries.length) {
+    // 外側へたどり、同じ向きの並びで、すぐ下（右）にボックスがあるところを探す。
+    // 見つかったら、消した分だけ途中の枠を縮め、そのボックスを伸ばす（途中の枠に余白などが付いていてもよい）
+    const dir = lca.node.split;
+    const chain = [];
+    let a = lca;
+    let found = null;
+    while (a.parent) {
+      const q = findBox(a.parent);
+      if (!q || q.kind !== 'split' || q.node.split !== dir || !q.src) break;
+      const sibs = curSlide().boxes.filter((b) => b.parent === q.path);
+      const ia = sibs.findIndex((b) => b.path === a.path);
+      chain.push({ q, sibs, ia });
+      if (ia + 1 < sibs.length) {
+        found = true;
+        break;
+      }
+      a = q;
+    }
+    if (found) {
+      const removed = entries.slice(i0, i1 + 1);
+      const freed = removed.reduce((x, e) => x + e.len, 0) + gap * removed.length;
+      const files = new Set();
+      chain.forEach(({ q, sibs, ia }, level) => {
+        const L = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
+        const n = sibs.length;
+        const ratio = Array.isArray(q.node.ratio) && q.node.ratio.length === n ? plain(q.node.ratio) : Array(n).fill(1);
+        let kq = null;
+        sibs.forEach((b, i) => {
+          if (kq == null && typeof ratio[i] === 'number' && ratio[i] > 0) kq = L(b) / ratio[i];
+        });
+        const change = (i, delta) => {
+          if (typeof ratio[i] === 'string' || !kq) ratio[i] = `${round2(L(sibs[i]) + delta)}${u}`;
+          else ratio[i] = round4(ratio[i] + delta / kq);
+        };
+        change(ia, -freed);
+        if (level === chain.length - 1) change(ia + 1, freed);
+        setProp(S.files[q.src.file].doc, q.src.path, 'ratio', ratio);
+        files.add(q.src.file);
+      });
+      // 消した範囲の中の部分は、比率をそのまま残す（枠が縮んだ分だけ、ちょうど収まる）
+      const list = rest.map((e) => ({ ...e }));
+      for (const f of files) if (f !== lca.src.file) fileChanged(f);
+      return writeEntries(lca, list);
+    }
+  }
   const j = i1 + 1 < entries.length ? i1 + 1 : i0 - 1;
   const nb = { ...entries[j] };
   const removed = entries.slice(i0, i1 + 1);
@@ -2337,6 +2376,6 @@ window.addEventListener('beforeunload', (e) => {
   if (anyDirty()) e.preventDefault();
 });
 initReopen();
-window.slideCreator = { state: S, buildPPTX, finishPPTX }; // 開発者ツールからの確認用
+window.slideCreator = { state: S, buildPPTX, finishPPTX, parse, rebuild, setSel, removeSelection, mergeSelection, curSlide }; // 開発者ツールからの確認用
 // 開発用：URL に ?demo を付けると examples/demo を開く（画面にボタンは出さない）
 if (new URLSearchParams(location.search).has('demo')) openSource(new UrlSource('../examples/demo/', 'demo'));
