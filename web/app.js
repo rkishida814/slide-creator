@@ -4,7 +4,7 @@ import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, FONTS, DEFAULT_FONT } from '../src/core/html.js';
 import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
-import { PER_INCH, toUnit, defaultPadding } from '../src/core/units.js';
+import { PER_INCH, toUnit, defaultPadding, parseBox } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
@@ -157,7 +157,8 @@ function renderSlideTabs() {
 
 const FRAME_CSS = `
 html { background: #dfe3e8; }
-body { background: transparent !important; overflow: hidden; }
+body { background: transparent !important; overflow: auto; margin: 0; }
+.zoom-space { position: absolute; left: 0; top: 0; pointer-events: none; }
 section.slide { position: absolute; left: 0; top: 0; box-shadow: 0 1px 6px rgba(0,0,0,.25); }
 .sel, .drop, .hov { position: absolute; pointer-events: none; display: none; }
 .hov { z-index: 9; }
@@ -211,6 +212,14 @@ function setupFrame() {
     d.className = cls;
     sec.append(d);
   }
+  // 拡大したときにスクロールできる広さを作る
+  const space = doc.createElement('div');
+  space.className = 'zoom-space';
+  doc.body.append(space);
+  // 書き換えて描き直しても、見ていた位置を保つ
+  doc.defaultView.addEventListener('scroll', () => {
+    S.scroll = { x: doc.defaultView.scrollX, y: doc.defaultView.scrollY };
+  });
   // クリックで 1 つ選ぶ。ドラッグで、長方形になるように複数選ぶ。
   // ⌘（cmd。Windows では Ctrl）を押しながらドラッグすると、離した先のボックスと中身を入れ替える
   let drag = null;
@@ -272,6 +281,83 @@ function setupFrame() {
   doc.addEventListener('keydown', onKey);
   applyView();
   measureOverflow(doc);
+  if (S.pendingFit) {
+    const p = S.pendingFit;
+    S.pendingFit = null;
+    fitTextBelow(p, doc);
+  }
+}
+
+// テキストのボックスを文字の高さに合わせ、下に余った部分を別のボックス（空き）にする。
+// すでにそうしてあれば（上下の分割で、このボックスの高さが長さで決まっていて、すぐ下が空きのボックス）、高さだけ合わせ直す
+function fitTextBelow(path, doc) {
+  const box = findBox(path);
+  if (!box || box.kind !== 'text' || !box.src) return;
+  const node = box.node || {};
+  if (node.split_below === false || !String(node.text ?? '').trim()) return;
+  const v = box.style?.valign || 'top';
+  if (v !== 'top') return; // 中央・下に揃えた文字は、下に余白を作らない
+  const el = [...doc.querySelectorAll('.txt')].find((x) => x.dataset.path === path);
+  if (!el || !el.firstElementChild) return;
+  const u = S.layout.unit;
+  const textH = el.firstElementChild.getBoundingClientRect().height / (S.ppu * S.view.s);
+  const pad = parseBox(node.padding ?? defaultPadding('text'), u);
+  const need = Math.ceil((textH + pad.t + pad.b) * 100) / 100;
+  const len = `${need}${u}`;
+  const parent = box.parent ? findBox(box.parent) : null;
+  const sibs = parent ? curSlide().boxes.filter((b) => b.parent === parent.path) : [];
+  const i = sibs.findIndex((b) => b.path === box.path);
+  const ratio0 = parent && Array.isArray(parent.node?.ratio) && parent.node.ratio.length === sibs.length ? parent.node.ratio : null;
+  const ours = parent && parent.kind === 'split' && parent.node.split === 'rows' && parent.src && ratio0
+    && typeof ratio0[i] === 'string' && sibs[i + 1] && sibs[i + 1].kind === 'empty';
+  if (ours) {
+    // 下の空きのボックスが無くならない範囲で、高さを合わせる
+    const avail = box.rect.h + sibs[i + 1].rect.h;
+    const h = Math.min(need, Math.floor(avail * 0.95 * 100) / 100);
+    if (Math.abs(toUnit(ratio0[i], u) - h) < 0.01) return;
+    const ratio = [...ratio0];
+    ratio[i] = `${h}${u}`;
+    return edit(parent, 'ratio', ratio);
+  }
+  // 余りが 0.5 cm に満たないときは分けない
+  if (box.rect.h - need < toUnit('0.5cm', u)) return;
+  const { file, path: ypath, mode } = box.src;
+  const ydoc = S.files[file].doc;
+  let pn = writtenNode(box);
+  if (typeof pn === 'string') pn = { text: pn };
+  const content = Object.fromEntries(Object.entries(pn).filter(([k]) => !FRAME_KEYS.includes(k)));
+  const children = [content, {}];
+  if (mode === 'direct') {
+    const keep = Object.fromEntries(Object.entries(pn).filter(([k]) => FRAME_KEYS.includes(k)));
+    replaceNode(ydoc, ypath, { ...keep, split: 'rows', ratio: [len, 1], children });
+  } else {
+    for (const k of CONTENT_KEYS) setProp(ydoc, ypath, k, null);
+    for (const k of Object.keys(content)) if (!CONTENT_KEYS.includes(k)) setProp(ydoc, ypath, k, null);
+    setProp(ydoc, ypath, 'split', 'rows');
+    setProp(ydoc, ypath, 'ratio', [len, 1]);
+    setProp(ydoc, ypath, 'children', children);
+  }
+  // 選択は、文字の入ったボックス（分けた上側）に移す
+  setSel([`${path}.0`]);
+  return fileChanged(file);
+}
+
+// 「テキストの下に生じた余白を別のボックスにする」を外したら、下の空きのボックスを消して元の 1 つに戻す
+function unfitTextBelow(box) {
+  const parent = box.parent ? findBox(box.parent) : null;
+  const sibs = parent ? curSlide().boxes.filter((b) => b.parent === parent.path) : [];
+  const i = sibs.findIndex((b) => b.path === box.path);
+  const { file, path } = box.src;
+  setProp(S.files[file].doc, path, 'split_below', false);
+  const ratio0 = parent && Array.isArray(parent.node?.ratio) ? parent.node.ratio : null;
+  if (parent && parent.kind === 'split' && parent.node.split === 'rows' && ratio0 && typeof ratio0[i] === 'string' && sibs[i + 1] && sibs[i + 1].kind === 'empty') {
+    const keep = parent.path;
+    const p = removeFromParent(parent, [i + 1]);
+    // 1 つに戻ったときは外側の位置に、そうでなければ同じ場所を選んだままにする
+    setSel([sibs.length === 2 ? keep : box.path]);
+    return p;
+  }
+  return fileChanged(file);
 }
 
 function placeIn(el, rect) {
@@ -361,13 +447,14 @@ function selectionRect() {
   return bs.length ? unionRect(bs.map((b) => b.rect)) : null;
 }
 
-// 拡大・位置合わせ。拡大しているときは、選択中のボックスを中心にする
+// 拡大・位置合わせ。拡大は、いま見えている左上の点を動かさずに右下へ広げる。拡大したらスクロールで全体を見られる
 function applyView() {
   const frame = $('#frame');
   const doc = frame.contentDocument;
   const sec = doc?.querySelector('section.slide');
   const slide = curSlide();
   if (!sec || !slide) return;
+  const win = doc.defaultView;
   const R = slide.rect;
   const ppu = S.ppu;
   const m = 24;
@@ -375,18 +462,30 @@ function applyView() {
   const fh = frame.clientHeight;
   const base = Math.min((fw - 2 * m) / (R.w * ppu), (fh - 2 * m) / (R.h * ppu));
   const s = base * (S.zoom || 1);
-  const selRect = S.dragSel?.rect || selectionRect();
-  let cx = R.w / 2;
-  let cy = R.h / 2;
-  if ((S.zoom || 1) > 1 && selRect) {
-    cx = selRect.x + selRect.w / 2;
-    cy = selRect.y + selRect.h / 2;
-  }
-  const offX = fw / 2 - cx * ppu * s;
-  const offY = fh / 2 - cy * ppu * s;
+  const W = R.w * ppu * s;
+  const H = R.h * ppu * s;
+  // 収まる向きは中央に、はみ出す向きは余白 m から並べる
+  const offX = W + 2 * m <= fw ? (fw - W) / 2 : m;
+  const offY = H + 2 * m <= fh ? (fh - H) / 2 : m;
   sec.style.transformOrigin = '0 0';
   sec.style.transform = `translate(${offX}px, ${offY}px) scale(${s})`;
+  const space = doc.querySelector('.zoom-space');
+  if (space) Object.assign(space.style, { width: `${Math.max(fw, W + 2 * m)}px`, height: `${Math.max(fh, H + 2 * m)}px` });
+  const prev = S.view;
+  let sx = S.scroll?.x || 0;
+  let sy = S.scroll?.y || 0;
+  if (prev && Math.abs(prev.s - s) > 1e-9) {
+    // 見えている左上の点（スライドの上の位置）を、拡大の前後で同じ場所に置く
+    // 左上の角がまだ見えているとき（100% から広げるときなど）は、左上の角から右下へ広げる
+    const px = (sx - prev.offX) / prev.s;
+    const py = (sy - prev.offY) / prev.s;
+    sx = px > 0 ? px * s + offX : 0;
+    sy = py > 0 ? py * s + offY : 0;
+  }
+  win.scrollTo(sx, sy);
+  S.scroll = { x: win.scrollX, y: win.scrollY };
   S.view = { s, offX, offY, r: { x: 0, y: 0 } };
+  const selRect = S.dragSel?.rect || selectionRect();
 
   const selEl = sec.querySelector('.sel');
   placeIn(selEl, selRect);
@@ -403,8 +502,8 @@ function leafAt(e) {
   const slide = curSlide();
   if (!slide || !S.view) return null;
   const { s, offX, offY } = S.view;
-  const x = (e.clientX - offX) / s / S.ppu;
-  const y = (e.clientY - offY) / s / S.ppu;
+  const x = (e.pageX - offX) / s / S.ppu;
+  const y = (e.pageY - offY) / s / S.ppu;
   let best = null;
   for (const b of slide.boxes) {
     const q = b.rect;
@@ -469,6 +568,7 @@ function redo() {
 }
 
 // 選んだ枠の設定を 1 つ変える
+const editOne = (box, key, value) => edit(box, key, value);
 function edit(box, key, value) {
   const { file, path } = box.src;
   try {
@@ -640,13 +740,20 @@ function removeFromParent(parent, idx) {
   const ratio = ratio0 ? ratio0.filter((_, k) => !drop.has(k)) : null;
   if (!list.length) return status('全部は削除できません。1 つ以上残してください', true);
 
-  if (parent.kind === 'split' && list.length === 1 && mode === 'direct') {
+  if (parent.kind === 'split' && list.length === 1) {
     // 残った 1 つを外側の位置に戻す（外側の名前・背景・枠線は残す）
-    const cur = getJS(doc, path) || {};
-    const keep = Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k)));
     let child = list[0];
     if (typeof child === 'string') child = { text: child };
-    replaceNode(doc, path, { ...(child || {}), ...keep });
+    child = child || {};
+    if (mode === 'direct') {
+      const cur = getJS(doc, path) || {};
+      const keep = Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k)));
+      replaceNode(doc, path, { ...child, ...keep });
+    } else {
+      // テンプレートの値を打ち消すため、使わない種類の中身は null にする
+      for (const k of CONTENT_KEYS) setProp(doc, path, k, k in child ? child[k] : null);
+      for (const [k, v] of Object.entries(child)) if (!CONTENT_KEYS.includes(k) && !FRAME_KEYS.includes(k)) setProp(doc, path, k, v);
+    }
   } else {
     setProp(doc, path, listKey, list);
     if (ratio) {
@@ -1286,6 +1393,11 @@ function alignRow(box, node, inh, hDflt, vDflt) {
 
 function textFields(box, node, inh) {
   const fs = fieldset(null);
+  // 文字の高さが変わりうる書き換えのあとで、下の余白を合わせ直す
+  const edit = (b, k, v) => {
+    S.pendingFit = box.path;
+    return editOne(b, k, v);
+  };
   const f = node.font || {};
   const fi = inh.font || {};
   fs.append(
@@ -1295,7 +1407,15 @@ function textFields(box, node, inh) {
       const pairs = [['text', v]];
       if (f.bold) pairs.push([['font', 'bold'], off]);
       if (f.italic) pairs.push([['font', 'italic'], off]);
+      S.pendingFit = box.path;
       editMany(box, pairs);
+    })),
+    row('', checkEl('テキストの下に生じた余白を別のボックスにする', node.split_below !== false, (x) => {
+      if (x) {
+        S.pendingFit = box.path;
+        return editOne(box, 'split_below', undefined);
+      }
+      return unfitTextBelow(box);
     })),
     row('大きさ', h2(numEl(f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, ['font', 'size'], +v)), 'pt')),
     row('フォント', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),

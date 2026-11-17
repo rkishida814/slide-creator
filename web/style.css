@@ -176,3 +176,7 @@ legend { color: var(--muted); padding: 0 4px; }
 
 /* ファイルから選ぶ */
 .pick-btn { flex: none; white-space: nowrap; padding: 4px 8px; font-size: 14px; }
+
+/* 切り替えの欄の文が長いときは折り返す */
+.row > label.chk, label.chk { white-space: normal; align-items: flex-start; }
+.chk input { margin-top: 3px; flex: none; }
