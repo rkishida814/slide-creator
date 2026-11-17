@@ -525,6 +525,7 @@ function applyView() {
   const one = S.selected ? findBox(S.selected) : null;
   $('#btn-split').disabled = !(one && one.src && isLeaf(one));
   $('#btn-zoom-fit').disabled = !(S.sel || []).length;
+  $('#btn-dup').disabled = !dupPlan();
   $('#btn-merge').disabled = !((S.sel || []).length > 1 && selectionUnit());
   $('#btn-delete').disabled = !((S.sel || []).length > 1 ? selectionUnit() : one && canRemove(one));
 }
@@ -823,6 +824,75 @@ function retryAfterTranspose(lca, fn) {
     renderProps();
     return fn();
   });
+}
+
+// ---- 複製して追加
+// 中身の無いボックス（空き）か
+function isEmptyNode(n) {
+  if (n == null) return true;
+  if (typeof n !== 'object' || Array.isArray(n)) return false;
+  return !['text', 'image', 'split', 'grid', 'children', 'items'].some((k) => n[k] != null);
+}
+
+// 選んだ範囲が、上下の並びの中の「横いっぱいの行」になっているかを調べ、複製の段取りを返す。
+// 複製した行の分だけ下のボックスを下にずらし、その分は、下のほうの空きのボックスを縮めて埋める。
+// 空きが足りない（スライドからはみ出す）ときや、行全体を選んでいないときは null
+function dupPlan() {
+  const sel = S.sel || [];
+  const slide = curSlide();
+  if (!sel.length || !slide) return null;
+  const boxes = sel.map(findBox).filter(Boolean);
+  if (!boxes.length) return null;
+  const selSet = new Set(sel);
+  const full = (b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b)).every((l) => selSet.has(l.path));
+  const isRows = (b) => b && b.kind === 'split' && b.node?.split === 'rows' && b.src;
+  // 行を含む上下の並び R を探す
+  const a = boxes.length === 1 ? boxes[0] : commonAncestor(boxes);
+  if (!a) return null;
+  let R = isRows(a) && !full(a) ? a : null;
+  let x = a;
+  while (!R) {
+    if (!full(x) || !x.parent) return null;
+    const p = findBox(x.parent);
+    if (isRows(p)) R = p;
+    else x = p;
+  }
+  // 空きが足りなければ、外側の上下の並びでも探す
+  for (let anc = R; isRows(anc); anc = anc.parent ? findBox(anc.parent) : null) {
+    const r = splitEntries(anc, selSet);
+    if (!r) return null;
+    const part = r.entries.slice(r.i0, r.i1 + 1);
+    const D = part.reduce((s2, e) => s2 + e.len, 0) + r.gap * part.length;
+    const room = r.entries.slice(r.i1 + 1).filter((e) => isEmptyNode(e.node)).reduce((s2, e) => s2 + e.len, 0);
+    if (D <= room + 1e-6) return { anc, r, D };
+  }
+  return null;
+}
+
+function duplicateRow() {
+  const plan = dupPlan();
+  if (!plan) return status('複製できません（行全体を選んでいないか、下の空きが足りません）。', true);
+  const { anc, r, D } = plan;
+  const { entries, i0, i1, gap, k, u } = r;
+  // 複製は、元と同じ長さに固定する（中の名前は外す）
+  const copies = entries.slice(i0, i1 + 1).map((e) => ({ node: stripIds(structuredClone(e.node ?? {})), ratio: `${round2(e.len)}${u}`, len: e.len }));
+  const after = entries.slice(i1 + 1).map((e) => ({ ...e }));
+  // 下のほうの空きから縮める
+  let need = D;
+  for (let j = after.length - 1; j >= 0 && need > 1e-6; j--) {
+    const e = after[j];
+    if (!isEmptyNode(e.node)) continue;
+    if (e.len <= need + 1e-6) {
+      need -= e.len + gap;
+      e.drop = true;
+      continue;
+    }
+    if (typeof e.ratio === 'string' || !k) e.ratio = `${round2(e.len - need)}${u}`;
+    else e.ratio = round4(e.ratio - need / k);
+    need = 0;
+  }
+  const list = [...entries.slice(0, i1 + 1), ...copies, ...after.filter((e) => !e.drop)];
+  return writeEntries(anc, list).then(() => status('複製して追加しました'));
 }
 
 // 並びを分割 lca に書き戻す。1 つだけになったら、分割をやめてその 1 つを lca の位置に置く
@@ -2368,6 +2438,7 @@ $('#btn-pptx').onclick = exportPPTX;
 $('#btn-pdf').onclick = exportPDF;
 $('#btn-split').onclick = openSplitDialog;
 $('#btn-merge').onclick = () => mergeSelection();
+$('#btn-dup').onclick = () => duplicateRow();
 $('#btn-delete').onclick = () => removeSelection();
 // 虫眼鏡：選んだボックスを左上に寄せ、いまの縦横比のまま、縦か横がプレビューいっぱいになるまで拡大する（つまみもそこまで動く）
 $('#btn-zoom-fit').onclick = () => {
