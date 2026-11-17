@@ -859,7 +859,7 @@ function renderProps() {
 
 // 内側の余白。上・右・下・左の 4 つを 1 行で
 function paddingRow(box, node) {
-  // テキストのボックスで余白を書いていないときは、決まった余白（上と左に 0.5 cm）を出す
+  // テキストのボックスで余白を書いていないときは、決まった余白（上下左右に 0.5 cm）を出す
   const def = defaultPadding(box.kind);
   const u = S.layout.unit;
   const defV = def ? def.map((x) => Math.round(toUnit(x, u) * 1000) / 1000) : null;

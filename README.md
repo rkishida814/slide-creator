@@ -101,7 +101,7 @@ slides:
 どのノードにも書けるもの：
 
 - `id`：名前。CLI で `--node photos` や `s1/photos` と指定できる。テンプレートの差し込み口にもなる
-- `padding`：余白。`background_inset: true` なら、背景と枠線も余白の分だけ内側に縮める。`1` / `[上下, 左右]` / `[上, 右, 下, 左]`。テキストのボックス（とテキストを入れる前の空のボックス）は、書かなければ上と左に 0.5 cm の余白を設ける（なくすときは `padding: 0`）
+- `padding`：余白。`background_inset: true` なら、背景と枠線も余白の分だけ内側に縮める。`1` / `[上下, 左右]` / `[上, 右, 下, 左]`。テキストのボックス（とテキストを入れる前の空のボックス）は、書かなければ上下左右に 0.5 cm の余白を設ける（なくすときは `padding: 0`）
 - `background`：色なら `"#RRGGBB"`。画像なら `{image: x.png, mode: tile（並べる）| cover（広げる）, tile: 模様 1 つの幅, color: 下地の色}`。文書の一番上に書くと全スライドの背景になる（スライドごとの `background` が優先）
 - `border: {width: 1 (pt), color: "#RRGGBB"}`
 
