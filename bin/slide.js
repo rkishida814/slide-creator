@@ -3,7 +3,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadProject, findTarget, LAYOUT_FILE } from '../src/node/project.js';
+import YAML from 'yaml';
+import { loadProject, findTarget, loadTemplates, LAYOUT_FILE } from '../src/node/project.js';
+import { resolveDoc } from '../src/core/resolve.js';
+import { importLayout, placeImported, layoutFileOf, dirOf } from '../src/core/import.js';
+import { parseBox } from '../src/core/units.js';
+import { replaceNode, stringify } from '../web/edit.js';
 
 const HELP = `slide-creator
 
@@ -16,6 +21,10 @@ const HELP = `slide-creator
                                        （--outline で枠と id を重ねて描く）
   slide export <dir> [--pptx] [--pdf] [-o OUTDIR]
                                        PPTX / PDF を書き出す（指定なしなら両方。既定は <dir>/out/）
+  slide import <dir> --node ID --from FOLDER [--slide ID] [--page ID]
+                                       FOLDER（<dir> の中のサブフォルダ）の layout.yaml の 1 枚（--page。省くと 1 枚目）の
+                                       ボックスの木を、--node のボックスの中身として layout.yaml に写す。
+                                       写した後は普通のボックスになり、元のファイルとはつながらない
 
 ノードの指定: id（"photos"）、スライド付き（"s1/photos"）、自動の経路（"s1.1.0"）`;
 
@@ -27,7 +36,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next != null && !next.startsWith('-') && ['slide', 'node', 'width'].includes(key)) args[key] = argv[++i];
+      if (next != null && !next.startsWith('-') && ['slide', 'node', 'width', 'from', 'page'].includes(key)) args[key] = argv[++i];
       else args[key] = true;
     } else args._.push(a);
   }
@@ -124,6 +133,29 @@ async function main() {
       await exportPDF(project, f);
       console.log(`書き出し: ${path.resolve(f)}`);
     }
+    return;
+  }
+  if (cmd === 'import') {
+    if (!args.node || !args.from) throw new Error('--node と --from を指定してください');
+    const target = findTarget(project.layout, args.slide, args.node);
+    const box = target.box;
+    if (!box?.src || box.src.mode !== 'direct' || box.src.file !== LAYOUT_FILE) throw new Error('取り込めるのは layout.yaml に直接書いたボックスだけ（テンプレートの中は不可）');
+    const file = layoutFileOf(args.from);
+    const abs = path.join(project.dir, file);
+    if (!fs.existsSync(abs)) throw new Error(`${abs} がありません`);
+    const sub = resolveDoc(YAML.parse(fs.readFileSync(abs, 'utf8')), loadTemplates(path.join(path.dirname(abs), 'templates')));
+    const node = box.node && typeof box.node === 'object' ? box.node : {};
+    const pad = parseBox(node.padding, project.layout.unit);
+    const rect = { w: box.rect.w - pad.l - pad.r, h: box.rect.h - pad.t - pad.b };
+    const usedIds = target.slide.boxes.filter((b) => b.id && b.path !== box.path).map((b) => b.id);
+    const { node: imported, scale, dropped } = importLayout(sub, { slide: args.page, dir: dirOf(file), unit: project.layout.unit, rect, usedIds });
+    const lf = path.join(project.dir, LAYOUT_FILE);
+    const doc = YAML.parseDocument(fs.readFileSync(lf, 'utf8'));
+    const plainTarget = Object.fromEntries(Object.entries(node).filter(([k]) => !k.startsWith('__')));
+    replaceNode(doc, box.src.path, placeImported(plainTarget, imported));
+    fs.writeFileSync(lf, stringify(doc));
+    console.log(`取り込み: ${file} → ${box.path}（倍率 ${+(scale * 100).toFixed(1)}%）`);
+    if (dropped.length) console.log(`この文書ですでに使っている id を外した: ${dropped.join(', ')}`);
     return;
   }
   throw new Error(`知らないコマンド: ${cmd}\n\n${HELP}`);

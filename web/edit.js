@@ -17,6 +17,22 @@ export function stringify(doc) {
 
 // 値を YAML のノードにする。数値・文字の配列（ratio, crop, padding）は [a, b] の形で書く
 function toNode(doc, value) {
+  const n = toNode1(doc, value);
+  // 中の小さい配列・対応表も、1 行の形にする（取り込んだレイアウトなど、大きな木を書くとき）
+  if (YAML.isCollection(n)) {
+    YAML.visit(n, {
+      Seq(_, s) {
+        if (s.items.every((v) => YAML.isScalar(v))) s.flow = true;
+      },
+      Map(_, m) {
+        if (m.items.length <= 4 && m.items.every((p) => YAML.isScalar(p.value) || (YAML.isCollection(p.value) && p.value.flow))) m.flow = true;
+      },
+    });
+  }
+  return n;
+}
+
+function toNode1(doc, value) {
   if (Array.isArray(value) && value.every((v) => v == null || typeof v !== 'object')) {
     const n = doc.createNode(value, { aliasDuplicateObjects: false });
     n.flow = true;

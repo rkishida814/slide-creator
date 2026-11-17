@@ -16,24 +16,7 @@ export function loadProject(dir) {
   const templates = loadTemplates(path.join(dir, 'templates'));
   const resolved = resolveDoc(doc, templates);
   const cache = new Map();
-  const nested = new Map();
   const env = {
-    // ボックスに入れる別のレイアウト（file はこのフォルダからの場所。中の templates/ も読む）
-    layout(file) {
-      if (nested.has(file)) return nested.get(file);
-      let v = null;
-      const abs = path.join(dir, file);
-      if (fs.existsSync(abs)) {
-        try {
-          const sub = YAML.parse(fs.readFileSync(abs, 'utf8'));
-          v = resolveDoc(sub, loadTemplates(path.join(path.dirname(abs), 'templates')));
-        } catch (e) {
-          v = { error: e.message };
-        }
-      }
-      nested.set(file, v);
-      return v;
-    },
     imageSize(src) {
       if (cache.has(src)) return cache.get(src);
       let v = null;
@@ -52,7 +35,7 @@ export function loadProject(dir) {
   return { dir, doc, resolved, layout };
 }
 
-function loadTemplates(tdir) {
+export function loadTemplates(tdir) {
   const out = {};
   if (!fs.existsSync(tdir)) return out;
   for (const f of fs.readdirSync(tdir)) {

@@ -1,6 +1,6 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
-import { layoutDoc, layoutFileOf, joinPath, dirOf } from '../src/core/layout.js';
+import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, loadUsedFonts, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
 import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
@@ -8,6 +8,7 @@ import { PER_INCH, toUnit, defaultPadding, parseBox } from '../src/core/units.js
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
+import { importLayout, placeImported, joinPath, dirOf } from '../src/core/import.js';
 
 const $ = (s) => document.querySelector(s);
 const IMAGE_RE = /\.(png|jpe?g|gif|svg|webp)$/i;
@@ -25,8 +26,8 @@ const S = {
   outline: true,
   imageSizes: new Map(),
   imageURLs: new Map(),
-  nested: new Map(), // ボックスに入れた別のレイアウト（ファイルの場所 → 展開済みの文書）
-  layoutFiles: [], // フォルダの中の、ボックスに入れられるレイアウト（サブフォルダの layout.yaml）
+  layoutFiles: [], // 取り込めるレイアウト（サブフォルダの layout.yaml）
+  importFor: null, // 「レイアウトを取り込む」の欄を開いているボックスの path
   overflow: [],
   view: null,
 };
@@ -53,7 +54,6 @@ async function openSource(source) {
     S.layoutFiles = all.filter((f) => /\/layout\.ya?ml$/.test(f) && !/(^|\/)(out|templates)\//.test(f));
     S.imageSizes.clear();
     S.imageURLs.clear();
-    S.nested.clear();
     S.slideId = null;
     setSel([]);
     $('#project-name').textContent = source.name + (source.writable ? '' : '（見本）');
@@ -80,57 +80,8 @@ function collectImages(node, out) {
   if (node.image != null) out.add(String(node.image));
   if (node.background?.image) out.add(String(node.background.image));
   if (node.icon) out.add(String(node.icon));
-  if (node.layout != null) out.add(`layout:${layoutFileOf(node.layout)}`);
   (node.children || []).forEach((c) => collectImages(c, out));
   (node.items || []).forEach((c) => collectImages(c, out));
-}
-
-function docImages(doc) {
-  const srcs = new Set();
-  (doc.slides || []).forEach((s) => {
-    collectImages(s.root, srcs);
-    if (s.background?.image) srcs.add(String(s.background.image));
-  });
-  if (doc.background?.image) srcs.add(String(doc.background.image));
-  return srcs;
-}
-
-// ボックスに入れた別のレイアウトを読み、展開しておく（中の画像の場所は、このフォルダからの場所にして srcs に足す）
-async function loadNested(srcs, stack = []) {
-  for (const x of [...srcs]) {
-    if (!x.startsWith('layout:')) continue;
-    srcs.delete(x);
-    const file = x.slice(7);
-    if (stack.includes(file)) continue; // 循環（配置の計算で誤りとして出す）
-    if (!S.nested.has(file)) {
-      let v = null;
-      let text = null;
-      try {
-        text = await S.source.readText(file);
-      } catch {
-        text = null; // 無いときは、配置の計算で「読めない」と出す
-      }
-      if (text != null) {
-        try {
-          const sub = parse(text).toJS() || {};
-          const templates = {};
-          for (const f of await S.source.list(joinPath(dirOf(file), 'templates'), 0)) {
-            if (/\.ya?ml$/.test(f)) templates[f.split('/').pop().replace(/\.ya?ml$/, '')] = parse(await S.source.readText(f)).toJS();
-          }
-          v = resolveDoc(sub, templates);
-        } catch (e) {
-          v = { error: e.message };
-        }
-      }
-      S.nested.set(file, v);
-    }
-    const v = S.nested.get(file);
-    if (!v || v.error) continue;
-    const dir = dirOf(file);
-    const inner = docImages(v);
-    await loadNested(inner, [...stack, file]);
-    for (const y of inner) srcs.add(y.startsWith('layout:') ? y : joinPath(dir, y));
-  }
 }
 
 async function loadImage(src) {
@@ -159,16 +110,16 @@ async function rebuild() {
       if (name.startsWith('templates/')) templates[name.slice(10).replace(/\.ya?ml$/, '')] = f.doc.toJS();
     }
     const resolved = resolveDoc(S.files['layout.yaml'].doc.toJS() || {}, templates);
-    const own = docImages(resolved);
-    const srcs = new Set(own);
-    await loadNested(srcs);
+    const srcs = new Set();
+    (resolved.slides || []).forEach((s) => {
+      collectImages(s.root, srcs);
+      if (s.background?.image) srcs.add(String(s.background.image));
+    });
+    if (resolved.background?.image) srcs.add(String(resolved.background.image));
     await Promise.all([...srcs].map(loadImage));
     // 選択肢には、フォルダの画像に加えて layout.yaml で使っている画像も入れる（Web 上のフォルダは一覧できないため）
-    for (const x of own) if (!x.startsWith('layout:') && !S.assets.includes(x)) S.assets.push(x);
-    S.layout = layoutDoc(resolved, {
-      imageSize: (src) => S.imageSizes.get(src) || null,
-      layout: (file) => S.nested.get(file) || null,
-    });
+    for (const x of srcs) if (!S.assets.includes(x)) S.assets.push(x);
+    S.layout = layoutDoc(resolved, { imageSize: (src) => S.imageSizes.get(src) || null });
     S.error = null;
   } catch (e) {
     S.error = e.message;
@@ -240,6 +191,7 @@ function renderPreview() {
 function setSel(paths) {
   S.sel = paths;
   S.selected = paths.length === 1 ? paths[0] : null;
+  if (S.importFor && S.importFor !== S.selected) S.importFor = null;
 }
 
 function select(path) {
@@ -750,7 +702,7 @@ function plain(node) {
   return out;
 }
 
-const CONTENT_KEYS = ['split', 'children', 'ratio', 'grid', 'items', 'image', 'crop', 'text', 'layout', 'slide'];
+const CONTENT_KEYS = ['split', 'children', 'ratio', 'grid', 'items', 'image', 'crop', 'text'];
 
 function changeKind(box, kind, imagePath) {
   const { file, path, mode } = box.src;
@@ -761,7 +713,6 @@ function changeKind(box, kind, imagePath) {
     grid: { grid: { rows: 2, cols: 2 }, items: [{}, {}, {}, {}] },
     image: { image: imagePath || S.assets[0] || '' },
     text: { text: '' },
-    layout: { layout: layoutRefOf(S.layoutFiles[0] || '') },
   }[kind];
   if (mode === 'direct') {
     const cur = getJS(doc, path);
@@ -812,7 +763,7 @@ function canRemove(box) {
 function hasContent(box) {
   const slide = curSlide();
   const inside = (b) => b.path === box.path || (b.parent && inside(findBox(b.parent)));
-  return slide.boxes.some((b) => (b.kind === 'image' || b.kind === 'text' || b.kind === 'layout') && inside(b));
+  return slide.boxes.some((b) => (b.kind === 'image' || b.kind === 'text') && inside(b));
 }
 
 // ---- 分割の中の、選んだ範囲を正確に扱う
@@ -956,7 +907,7 @@ function retryAfterTranspose(lca, fn) {
 function isEmptyNode(n) {
   if (n == null) return true;
   if (typeof n !== 'object' || Array.isArray(n)) return false;
-  return !['text', 'image', 'layout', 'split', 'grid', 'children', 'items'].some((k) => n[k] != null);
+  return !['text', 'image', 'split', 'grid', 'children', 'items'].some((k) => n[k] != null);
 }
 
 // 選んだ範囲が、上下の並びの中の「横いっぱいの行」になっているかを調べ、複製の段取りを返す。
@@ -1214,7 +1165,7 @@ function mergeSelection() {
   const slide = curSlide();
   const order = (b) => slide.boxes.indexOf(b);
   const leaves = (S.sel || []).map(findBox).filter(Boolean).sort((a, b) => order(a) - order(b));
-  const filled = leaves.filter((b) => b.kind === 'image' || b.kind === 'text' || b.kind === 'layout');
+  const filled = leaves.filter((b) => b.kind === 'image' || b.kind === 'text');
   if (filled.length > 1 && !S.confirmed && !confirm('内容は、選んだ中でいちばん上か左にあるボックスのものだけを残し、ほかは消します。まとめますか？')) return;
   let node = filled.length ? writtenNode(filled[0]) : {};
   if (typeof node === 'string') node = { text: node };
@@ -1364,8 +1315,8 @@ function renderProps() {
       if (v === kind) return;
       // 画像にするとき、フォルダに画像が無ければファイルを選ぶ画面を出す
       if (v === 'image' && !S.assets.length) return pickImageFile().then((path) => (path ? changeKind(box, v, path) : renderProps()));
-      if (v === 'layout' && !S.layoutFiles.length) {
-        status('フォルダの中に、ボックスに入れられるレイアウト（サブフォルダの layout.yaml）がありません', true);
+      if (v === 'layout') {
+        S.importFor = box.path;
         return renderProps();
       }
       changeKind(box, v);
@@ -1373,8 +1324,8 @@ function renderProps() {
   }
 
   // 中身
+  if (S.importFor === box.path && isLeaf(box)) el.append(importFields(box));
   if (box.kind === 'image') el.append(imageFields(box, node, inh));
-  if (box.kind === 'layout') el.append(layoutFields(box, node, inh));
   if (kind === 'text') el.append(textFields(box, node, inh));
 
   // 枠
@@ -2177,26 +2128,75 @@ function imageFields(box, node, inh) {
   return fs;
 }
 
-// "fig_intro/layout.yaml" → "fig_intro"（フォルダの名前で書く）
-function layoutRefOf(file) {
-  return file.replace(/\/layout\.yaml$/, '');
+// ---------------------------------------------------------------- レイアウトを取り込む
+// サブフォルダの layout.yaml の 1 枚の、ボックスの木を写す。写した後はこの文書の普通のボックスになる
+async function readSubLayout(file) {
+  const sub = parse(await S.source.readText(file)).toJS() || {};
+  const templates = {};
+  for (const f of await S.source.list(joinPath(dirOf(file), 'templates'), 0)) {
+    if (/\.ya?ml$/.test(f)) templates[f.split('/').pop().replace(/\.ya?ml$/, '')] = parse(await S.source.readText(f)).toJS();
+  }
+  return resolveDoc(sub, templates);
 }
 
-function layoutFields(box, node, inh) {
-  const fs = fieldset(null);
-  const cur = String(node.layout);
-  const opts = [...new Set([...S.layoutFiles.map(layoutRefOf), cur])].map((a) => [a, a]);
-  const n = box.nested;
-  fs.append(row('レイアウト', selectEl(opts, cur, (v) => edit(box, 'layout', v)), 'サブフォルダにある layout.yaml。その 1 枚を、縦横比を保ってこのボックスに収める'));
-  if (n && n.slides.length > 1) {
-    fs.append(row('ページ', selectEl(n.slides.map((id, i) => [id, `${i + 1}ページ（${id}）`]), n.slide, (v) => edit(box, 'slide', v === n.slides[0] ? undefined : v))));
+function importFields(box) {
+  const fs = fieldset('レイアウトを取り込む');
+  if (!S.layoutFiles.length) {
+    fs.append(h('p', 'note', 'このフォルダの中のサブフォルダに、取り込める layout.yaml がありません（例：fig_intro/layout.yaml）。'));
+    const acts0 = h('div', 'actions');
+    acts0.append(btn('やめる', () => { S.importFor = null; renderProps(); }));
+    fs.append(acts0);
+    return fs;
   }
+  const opts = S.layoutFiles.map((f) => [f, f.replace(/\/layout\.ya?ml$/, '')]);
+  let file = opts[0][0];
+  let page = null;
+  const pageRow = h('div');
+  const loadPages = async () => {
+    pageRow.innerHTML = '';
+    page = null;
+    try {
+      const sub = await readSubLayout(file);
+      const ids = (sub.slides || []).map((x, i) => x.id || `s${i + 1}`);
+      if (ids.length > 1) {
+        page = ids[0];
+        pageRow.append(row('ページ', selectEl(ids.map((id, i) => [id, `${i + 1}ページ（${id}）`]), page, (v) => { page = v; })));
+      }
+    } catch (e) {
+      pageRow.append(h('p', 'warn', `読めません: ${e.message}`));
+    }
+  };
   fs.append(
-    row('横の位置', selectEl(H_OPTS, node.align ?? inh.align ?? 'center', (v) => edit(box, 'align', v))),
-    row('縦の位置', selectEl(V_OPTS, node.valign ?? inh.valign ?? 'middle', (v) => edit(box, 'valign', v))),
+    row('レイアウト', selectEl(opts, file, (v) => { file = v; loadPages(); })),
+    pageRow,
+    h('p', 'note', 'そのレイアウトのボックスの組み合わせ（分割・比率・文字・画像）を、このボックスの中身として写します。写した後は、このスライドの普通のボックスとして直せます（元のファイルとはつながりません）。'),
   );
-  if (n) fs.append(h('div', 'note', `表示する大きさ ${fmt(n.rect.w)} × ${fmt(n.rect.h)} ${S.layout.unit}（元の ${Math.round(n.scale * 100)}%。文字の大きさも同じ割合になる）。中身を直すときは、そのフォルダを開く`));
+  const acts = h('div', 'actions');
+  acts.append(btn('取り込む', () => doImport(box, file, page)), btn('やめる', () => { S.importFor = null; renderProps(); }));
+  fs.append(acts);
+  loadPages();
   return fs;
+}
+
+async function doImport(box, file, page) {
+  if (!box.src || box.src.mode !== 'direct') return status('取り込めるのは、layout.yaml に直接書いたボックスだけです（テンプレートの中は不可）', true);
+  try {
+    const sub = await readSubLayout(file);
+    const node = box.node && typeof box.node === 'object' ? box.node : {};
+    const pad = parseBox(node.padding, S.layout.unit);
+    const rect = { w: box.rect.w - pad.l - pad.r, h: box.rect.h - pad.t - pad.b };
+    const usedIds = curSlide().boxes.filter((b) => b.id && b.path !== box.path).map((b) => b.id);
+    const { node: imported, scale, dropped } = importLayout(sub, { slide: page, dir: dirOf(file), unit: S.layout.unit, rect, usedIds });
+    const target = Object.fromEntries(Object.entries(plain(node) || {}).filter(([k]) => typeof k === 'string'));
+    replaceNode(S.files[box.src.file].doc, box.src.path, placeImported(target, imported));
+    S.importFor = null;
+    await fileChanged(box.src.file);
+    const msg = [`${file} を取り込みました（倍率 ${+(scale * 100).toFixed(1)}%）`];
+    if (dropped.length) msg.push(`このスライドですでに使っている id を外しました: ${dropped.join(', ')}`);
+    status(msg.join('。'));
+  } catch (e) {
+    status(`取り込めません: ${e.message}`, true);
+  }
 }
 
 async function cropDialog(box, node, el) {
@@ -2552,8 +2552,8 @@ function bgRows(cur, write) {
   return rows;
 }
 
-const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト', layout: 'レイアウト' };
-const KIND_OPTS = [['text', 'テキスト'], ['image', '画像'], ['layout', 'レイアウト']];
+const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト' };
+const KIND_OPTS = [['text', 'テキスト'], ['image', '画像'], ['layout', 'レイアウトを取り込む…']];
 const FIT_OPTS = [['contain', '切らずに全体を収める'], ['cover', 'ボックスいっぱいに広げ、はみ出た部分を切る'], ['stretch', '縦横比を変えてボックスに合わせる']];
 const H_OPTS = [['left', '左'], ['center', '中央'], ['right', '右']];
 const FONT_OPTS = FONTS.map((f) => [f, f]);
