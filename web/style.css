@@ -216,3 +216,20 @@ aside { min-width: 420px; }
 
 /* 数値の欄は 5 文字分にして、同じ行のほかの欄に幅を回す */
 .row input[type=number] { width: 5em; }
+
+/* 2 つの組を並べる行：[1 つ目の入力欄・単位] [2 つ目の名前] [2 つ目の入力欄・単位]。1 つ目は入力の列の左端から始める */
+.pair-line { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; column-gap: 6px; flex-wrap: nowrap; }
+.pair { display: flex; align-items: center; gap: 4px; min-width: 0; flex: none; }
+/* 設定欄の幅：2 つの組の行が切れずに収まる幅を下限にする */
+aside { width: 480px; min-width: 460px; }
+/* 2 つの組の行は、.row .in（横に詰める指定）より強く、3 列の格子にする */
+.row .in.pair-line { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; column-gap: 8px; }
+.row .in.pair-line > .pair { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.row .in.pair-line > .pair > input, .row .in.pair-line > .pair > select { flex: 1 1 0; min-width: 0; width: auto; }
+
+/* 枠の見出しの左端を、項目名の左端にそろえる */
+legend { padding: 0 4px 0 0; }
+
+/* トリミングの 4 つの欄は、入力の列の幅に収める */
+.row .crop4 { display: flex; gap: 4px; min-width: 0; }
+.row .crop4 input[type=number] { flex: 1 1 0; min-width: 0; width: auto; }

@@ -1296,18 +1296,15 @@ function paddingRow(box, node, targets) {
     const a = v.map((y) => +y || 0);
     writeAll('padding', (t) => padValue(t, a));
   };
-  // ふだんは、上下と左右を 1 つずつの欄で同時に変える
-  const pair = h('span', 'in pad4');
-  [['↕', '上下', [0, 2]], ['↔', '左右', [1, 3]]].forEach(([icon, title, ks]) => {
-    const ic = h('span', 'pad-ic', icon);
-    ic.title = title;
+  // ふだんは、上下と左右を 1 つずつの欄で同時に変える（ほかの 2 つの組の行と同じ並べ方）
+  const pairIn = (ks) => {
     const same = v[ks[0]] === v[ks[1]];
-    const inp = numEl(same ? v[ks[0]] ?? 0 : '', same ? '0' : '別々', (x) => {
+    return numEl(same ? v[ks[0]] ?? 0 : '', same ? '0' : '別々', (x) => {
       for (const k of ks) v[k] = x === '' ? 0 : +x;
       write();
     }, 0.5);
-    pair.append(ic, h('span', 'pad-name', title), inp);
-  });
+  };
+  const pair = pairLine(['余白（上下）', pairIn([0, 2])], ['余白（左右）', pairIn([1, 3])]);
   // 上・右・下・左を別々に変える欄は、折りたたんでおく（上下・左右がそろっていないときは開く）
   const four = h('span', 'in pad4');
   [['↑', '上'], ['→', '右'], ['↓', '下'], ['←', '左']].forEach(([icon, title], k) => {
@@ -1326,7 +1323,7 @@ function paddingRow(box, node, targets) {
   const sum = document.createElement('summary');
   sum.textContent = '上・右・下・左を別々に設定する';
   det.append(sum, four);
-  const r = row('余白', pair);
+  const r = fullRow(pair);
   const rd = row('', det);
   const inset = checkEl('背景ごと余白を設ける', !!node.background_inset, (x) => writeAll('background_inset', () => x || undefined));
   const r2 = row('', inset);
@@ -2035,22 +2032,22 @@ function alignRow(box, node, inh, hDflt, vDflt) {
   ));
 }
 
-// 1 行に 2 つの組（名前・入力欄・単位）を、同じ幅で並べる。行の全幅を使う（名前の列には入れない）
+// 1 行に 2 つの組（名前・入力欄・単位）を並べる。1 つ目の名前は、ほかの行と同じ名前の列に置き、
+// 1 つ目の入力欄は、ほかの行の入力欄と左端をそろえる。2 つ目の名前と入力欄は、同じ行の右半分に置く
 function pairLine(a, b) {
-  const line = h('span', 'pair-line');
-  for (const [lab, ctl, unit] of [a, b]) {
-    const p = h('span', 'pair');
-    if (lab) p.append(h('label', 'pair-label', lab));
-    p.append(ctl);
-    if (unit) p.append(h('span', 'pair-unit', unit));
-    line.append(p);
-  }
+  const line = h('span', 'in pair-line');
+  const group = (ctl, unit) => {
+    const g = h('span', 'pair');
+    g.append(ctl);
+    if (unit) g.append(h('span', 'pair-unit', unit));
+    return g;
+  };
+  line.append(group(a[1], a[2]), h('label', 'pair-label', b[0]), group(b[1], b[2]));
+  line._rowLabel = a[0];
   return line;
 }
-function fullRow(content) {
-  const r = h('div', 'row full');
-  r.append(content);
-  return r;
+function fullRow(line) {
+  return row(line._rowLabel || '', line);
 }
 
 function textFields(box, node, inh) {
