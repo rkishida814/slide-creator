@@ -195,3 +195,6 @@ legend { color: var(--muted); padding: 0 4px; }
 .row > .pad-detail, .in > .pad-detail { min-width: 0; width: 100%; flex: 1 1 auto; }
 .pad-detail > .pad4 { display: flex; align-items: center; width: 100%; min-width: 0; }
 .pad-detail summary { outline-offset: 0; }
+
+/* 縦に並ぶボタンは、いちばん長いボタンに幅をそろえる（右端をそろえる） */
+.actions { display: grid; grid-template-columns: max-content; justify-items: stretch; }

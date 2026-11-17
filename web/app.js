@@ -1779,7 +1779,8 @@ function sizeFields(box) {
       keepOneFlexible(ratio, c.i);
       edit(c.p, 'ratio', ratio);
     };
-    if (mode === 'len') return numEl(r3(lenOf(c.child)), '', (v) => +v > 0 && write(`${+v}${u}`));
+    // 長さで指定：上（左）のボックスはそのままにし、増えた分・減った分は、すぐ下（右）のボックスとやり取りする
+    if (mode === 'len') return numEl(r3(lenOf(c.child)), '', (v) => +v > 0 && (resizeAlong(c, dir, +v) ?? write(`${+v}${u}`)));
     let val = ratio[c.i];
     if (typeof val === 'string') {
       // 長さで決めている部分を比率で表すときは、比率で決めているほかの部分を基準にする
@@ -1794,6 +1795,61 @@ function sizeFields(box) {
   fs.append(row('幅', line));
   if (shared) fs.append(h('p', 'warn', 'この大きさは、同じテンプレートを使う全てのスライドで共通です。'));
   return fs;
+}
+
+// ボックス（c.child）の長さを v にする。上（左）のボックスは動かさず、増減の分は、すぐ下（右）のボックスとやり取りする。
+// いちばん下（右）なら外側へたどり、外側の並びで、すぐ下（右）のボックスとやり取りする（途中の枠は一緒に伸び縮みする）。
+// 扱えない形（格子の中など）なら null を返す
+function resizeAlong(c, dir, v) {
+  const u = S.layout.unit;
+  const L = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
+  const delta = v - L(c.child);
+  if (Math.abs(delta) < 1e-6) return true;
+  const writes = [];
+  let x = c.child;
+  let q = c.p;
+  let first = true;
+  while (q) {
+    if (q.kind === 'split' && q.node?.split === dir && q.src) {
+      const sibs = curSlide().boxes.filter((b) => b.parent === q.path);
+      const i = sibs.findIndex((b) => b.path === x.path);
+      if (i < 0) return null;
+      const ratio = Array.isArray(q.node.ratio) && q.node.ratio.length === sibs.length ? plain(q.node.ratio) : Array(sibs.length).fill(1);
+      let k = null;
+      sibs.forEach((b, j) => {
+        if (k == null && typeof ratio[j] === 'number' && ratio[j] > 0) k = L(b) / ratio[j];
+      });
+      const change = (j, d) => {
+        if (typeof ratio[j] === 'string' || !k) ratio[j] = `${round2(L(sibs[j]) + d)}${u}`;
+        else ratio[j] = round4(ratio[j] + d / k);
+      };
+      if (first) ratio[i] = `${round2(v)}${u}`;
+      else change(i, delta);
+      first = false;
+      writes.push([q, ratio]);
+      if (i + 1 < sibs.length) {
+        if (L(sibs[i + 1]) - delta < -1e-6) {
+          status(dir === 'rows' ? '下のボックスに空きが足りないので、この高さにはできません。' : '右のボックスに空きが足りないので、この幅にはできません。', true);
+          return true;
+        }
+        change(i + 1, -delta);
+        const files = new Set();
+        for (const [qq, r] of writes) {
+          setProp(S.files[qq.src.file].doc, qq.src.path, 'ratio', r);
+          files.add(qq.src.file);
+        }
+        for (const f of files) fileChanged(f);
+        return true;
+      }
+    } else if (!(q.kind === 'split' && q.src)) {
+      return null;
+    }
+    // いちばん下（右）か、向きの違う並び：外側へたどる
+    x = q;
+    q = q.parent ? findBox(q.parent) : null;
+  }
+  status(dir === 'rows' ? '下に空きが無いので、この高さにはできません。' : '右に空きが無いので、この幅にはできません。', true);
+  return true;
 }
 
 function findTemplateName(box) {
@@ -1857,7 +1913,9 @@ function imageFields(box, node, inh) {
   const acts = h('div', 'actions');
   acts.append(btn('画像を見ながらトリミング…', () => cropDialog(box, node, el)));
   // 画像の上下に隙間があるときだけ、詰めるボタンを出す
-  if (el && box.rect.h - el.rect.h > 0.01) acts.append(btn('画像の上下の余白を詰める', () => fitImageBelow(box)));
+  // （ボックスの余白の分は除く）
+  const padB = parseBox(node.padding, S.layout.unit);
+  if (el && box.rect.h - padB.t - padB.b - el.rect.h > 0.01) acts.append(btn('画像の上下の余白を詰める', () => fitImageBelow(box)));
   if (node.crop) acts.append(btn('トリミングを外す', () => edit(box, 'crop', undefined)));
   fs.append(acts);
   if (el) fs.append(h('div', 'note', `元画像 ${el.natural.w} × ${el.natural.h} px、表示する大きさ ${fmt(el.rect.w)} × ${fmt(el.rect.h)} ${S.layout.unit}、解像度 ${el.dpi} dpi`));
