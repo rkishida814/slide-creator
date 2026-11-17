@@ -1421,6 +1421,10 @@ function multiSizeFields(lca, r, all) {
     if (lca.kind === 'split' && lca.node.split === dir && !all) {
       return numEl(r3(cur), '', (v) => +v > 0 && setRangeLength(lca, +v));
     }
+    // 選んだボックスだけを伸び縮みさせる（上・左のボックスは動かさない）
+    if (lca.kind === 'split' && lca.node.split !== dir) {
+      return numEl(r3(cur), '', (v) => +v > 0 && resizeSelectionCross(lca, dir, +v - cur));
+    }
     // 格子の一部のセルを選んだときは、値を出すだけ
     const c = lca.kind === 'grid' && !all ? null : sizeCtrl(lca, dir);
     if (!c) {
@@ -1442,6 +1446,39 @@ function multiSizeFields(lca, r, all) {
   line.append(dimInput('cols'), u, h('label', null, '高さ'), dimInput('rows'), u);
   fs.append(row('幅', line));
   return fs;
+}
+
+// 左右に並ぶ部分（lca）にまたがって選んだボックスの高さ（上下に並ぶときは幅）を delta だけ変える。
+// 1 つ目の部分では resizeAlong で外側まで伸ばし（下のボックスとやり取りする）、ほかの部分では、選んだボックスを同じだけ伸ばす
+function resizeSelectionCross(lca, dir, delta) {
+  if (Math.abs(delta) < 1e-6) return;
+  const u = S.layout.unit;
+  const L = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
+  const leaves = (S.sel || []).map(findBox).filter(Boolean);
+  const cs = [];
+  const seen = new Set();
+  for (const l of leaves) {
+    const c = sizeCtrl(l, dir);
+    if (!c || seen.has(c.child.path)) continue;
+    seen.add(c.child.path);
+    cs.push(c);
+  }
+  if (!cs.length) return status('この範囲の大きさは変えられません。', true);
+  // 選んだボックスが、それぞれの部分の中で上下（左右）に分けた一部なら、部分ごとに伸ばす
+  const inside = cs.every((c) => c.p.path !== lca.path && within(c.p, lca));
+  if (!inside) {
+    const c = sizeCtrl(lca, dir);
+    if (!c) return status('この範囲の大きさは変えられません。', true);
+    return resizeAlong(c, dir, L(c.child) + delta);
+  }
+  const extra = [];
+  for (const c of cs.slice(1)) {
+    const sibs = curSlide().boxes.filter((b) => b.parent === c.p.path);
+    const ratio = Array.isArray(c.p.node.ratio) && c.p.node.ratio.length === sibs.length ? plain(c.p.node.ratio) : Array(sibs.length).fill(1);
+    ratio[c.i] = `${round2(L(c.child) + delta)}${u}`;
+    extra.push([c.p, ratio]);
+  }
+  return resizeAlong(cs[0], dir, L(cs[0].child) + delta, extra);
 }
 
 // 分割 lca の中の選んだ部分を、合計の長さが total になるように長さで固定する
@@ -1828,7 +1865,7 @@ function sizeFields(box) {
 // ボックス（c.child）の長さを v にする。上（左）のボックスは動かさず、増減の分は、すぐ下（右）のボックスとやり取りする。
 // いちばん下（右）なら外側へたどり、外側の並びで、すぐ下（右）のボックスとやり取りする（途中の枠は一緒に伸び縮みする）。
 // 扱えない形（格子の中など）なら null を返す
-function resizeAlong(c, dir, v) {
+function resizeAlong(c, dir, v, extra = []) {
   const u = S.layout.unit;
   const L = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
   const delta = v - L(c.child);
@@ -1862,7 +1899,7 @@ function resizeAlong(c, dir, v) {
         }
         change(i + 1, -delta);
         const files = new Set();
-        for (const [qq, r] of writes) {
+        for (const [qq, r] of [...extra, ...writes]) {
           setProp(S.files[qq.src.file].doc, qq.src.path, 'ratio', r);
           files.add(qq.src.file);
         }
