@@ -2,11 +2,25 @@
 import { richToHTML, paragraphs } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
-// PPTX と同じ既定フォント（Helvetica）。和文は PowerPoint 側では Office テーマの東アジアフォントになる
+// フォントは、英数字（英語）用と日本語用を別々に選ぶ（font.family と font.family_ja）。
+// 日本語の字（かな・漢字・全角の記号）は日本語用、それ以外は英語用のフォントで書く。PPTX でも同じに分ける
 export const DEFAULT_FONT = 'Helvetica';
-// 画面で選べるフォント。Noto Sans JP は Google Fonts から読み込む（PowerPoint では、その PC に入っているときだけ同じ字形になる）
-export const FONTS = ['Helvetica', 'Arial', 'Times New Roman', 'Noto Sans JP'];
-const FALLBACK_FONTS = `'Hiragino Sans', 'Hiragino Kaku Gothic ProN', 'Yu Gothic', 'Meiryo', sans-serif`;
+export const DEFAULT_FONT_JA = 'BIZ UDPゴシック';
+export const JA_FONTS = ['BIZ UDPゴシック', 'ヒラギノ角ゴシック', 'Noto Sans JP', 'メイリオ'];
+// 英語用には、日本語のフォントも選べる（Helvetica・Arial・Times New Roman は英語用だけ）
+export const FONTS = [...JA_FONTS, 'Helvetica', 'Arial', 'Times New Roman'];
+// css：ブラウザで使う名前、pptx：PowerPoint に書く名前、web：手元に無いとき Google Fonts から読み込む名前
+const FONT_DEF = {
+  'BIZ UDPゴシック': { css: `'BIZ UDPGothic', 'BIZ UDPゴシック'`, pptx: 'BIZ UDPゴシック', web: 'BIZ+UDPGothic' },
+  'ヒラギノ角ゴシック': { css: `'Hiragino Sans', 'Hiragino Kaku Gothic ProN'`, pptx: 'Hiragino Sans' },
+  'Noto Sans JP': { css: `'Noto Sans JP'`, pptx: 'Noto Sans JP', web: 'Noto+Sans+JP' },
+  'メイリオ': { css: `'Meiryo', 'メイリオ'`, pptx: 'Meiryo' },
+};
+const cssName = (name) => FONT_DEF[name]?.css || `'${String(name).replace(/['"<>;]/g, '')}'`;
+export const pptxFontName = (name) => FONT_DEF[name]?.pptx || String(name);
+// 日本語の字（かな・漢字・全角の記号など）
+export const JA_CHARS = /[\u2E80-\u9FFF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF]+/g;
+const jaSpans = (html) => html.split(/(<[^>]*>)/).map((part) => (part.startsWith('<') ? part : part.replace(JA_CHARS, (m) => `<span class="j">${m}</span>`))).join('');
 
 export function color(c, fallback = '#000000') {
   if (!c) return fallback;
@@ -25,11 +39,17 @@ export function renderHTML(layout, opts = {}) {
   const L = (v) => `${+v.toFixed(4)}${u}`;
   const slides = opts.slides ? layout.slides.filter((s) => opts.slides.includes(s.id)) : layout.slides;
   const labelSize = layout.width / 90;
-  // Noto Sans JP を使う文字があるときだけ、描画を止めない形で読み込む（つながらなくても他の書体で描く）
-  const usesNoto = slides.some((sl) => sl.elements.some((e) => e.type === 'text' && e.font?.family === 'Noto Sans JP'));
-  const fontLink = usesNoto
-    ? '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;700&display=swap" media="print" onload="this.media=\'all\'">\n'
-    : '';
+  // Google Fonts のフォントを使う文字があるときだけ、描画を止めない形で読み込む（つながらなくても他の書体で描く）
+  const web = new Set();
+  for (const sl of slides) {
+    for (const e of sl.elements) {
+      if (e.type !== 'text') continue;
+      for (const n of [e.font?.family || DEFAULT_FONT, e.font?.family_ja || DEFAULT_FONT_JA]) if (FONT_DEF[n]?.web) web.add(FONT_DEF[n].web);
+    }
+  }
+  const fontLink = [...web]
+    .map((w) => `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=${w}:wght@400;700&display=swap" media="print" onload="this.media='all'">\n`)
+    .join('');
 
   const body = slides
     .map((s) => {
@@ -58,6 +78,7 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .img img { position: absolute; display: block; max-width: none; }
 .txt { display: flex; flex-direction: column; overflow: visible; }
 .txt > div { white-space: pre-wrap; overflow-wrap: anywhere; }
+.txt .j { font-family: var(--ja); }
 .missing { background: repeating-linear-gradient(45deg, #fdd, #fdd 10px, #fff 10px, #fff 20px); }
 .ol { border: 1px dashed rgba(220, 0, 80, .8); pointer-events: none; }
 .ol span { position: absolute; left: 0; top: 0; background: rgba(220, 0, 80, .85); color: #fff; padding: 0 .3em; font-family: sans-serif; line-height: 1.3; }
@@ -93,12 +114,14 @@ function renderElement(e, L, opts) {
   if (e.type === 'text') {
     const f = e.font;
     const jc = { top: 'flex-start', middle: 'center', bottom: 'flex-end' }[e.valign];
-    const fam = `'${String(f.family || DEFAULT_FONT).replace(/['"<>]/g, '')}', ${FALLBACK_FONTS}`;
+    const ja = `${cssName(f.family_ja || DEFAULT_FONT_JA)}, 'Hiragino Sans', sans-serif`;
+    const fam = `${cssName(f.family || DEFAULT_FONT)}, ${ja}`;
     const st = [
       pos(e.rect, L),
       `justify-content:${jc}`,
       `text-align:${e.align}`,
       `font-family:${fam}`,
+      `--ja:${ja}`,
       `font-size:${f.size}pt`,
       `font-weight:${f.bold ? 700 : 400}`,
       `font-style:${f.italic ? 'italic' : 'normal'}`,
@@ -106,7 +129,7 @@ function renderElement(e, L, opts) {
       `line-height:${e.line_height}`,
     ].join(';');
     const paras = paragraphs(e.text)
-      .map((p, i) => `<div class="pa"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${richToHTML(p) || '<br>'}</div>`)
+      .map((p, i) => `<div class="pa"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p)) || '<br>'}</div>`)
       .join('');
     return `<div ${data} class="txt" style="${st}"><div>${paras}</div></div>`;
   }

@@ -3,7 +3,7 @@
 // 文字はテキストボックス（余白0・自動調整なし）。
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
-import { DEFAULT_FONT } from './html.js';
+import { DEFAULT_FONT, DEFAULT_FONT_JA, pptxFontName } from './html.js';
 import { parseRich, hasRich, paragraphs } from './richtext.js';
 
 const hex = (c, fb) => {
@@ -61,7 +61,8 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
         const f = e.font;
         slide.addText(textRuns(e.text, f, e.para_space), {
           ...box,
-          fontFace: f.family || DEFAULT_FONT,
+          // 英語用と日本語用を「|」でつないで渡し、書き出した後で分ける（finishPPTX）
+          fontFace: `${pptxFontName(f.family || DEFAULT_FONT)}|${pptxFontName(f.family_ja || DEFAULT_FONT_JA)}`,
           fontSize: f.size,
           bold: !!f.bold,
           italic: !!f.italic,
@@ -120,8 +121,15 @@ export async function finishPPTX(pres, JSZip, type) {
   const zip = await JSZip.loadAsync(buf);
   for (const name of Object.keys(zip.files)) {
     if (!/^ppt\/slides\/slide\d+\.xml$/.test(name)) continue;
-    const xml = await zip.file(name).async('string');
-    if (!xml.includes('name="sc-tile:')) continue;
+    let xml = await zip.file(name).async('string');
+    // 文字のフォント：英語用（latin・cs）と日本語用（ea）に分ける。ea の文字コードの指定は日本語（Shift_JIS）にする
+    xml = xml.replace(/<a:(latin|ea|cs) typeface="([^"|]*)\|([^"]*)"([^>]*?)\/>/g, (m, kind, latin, ja, rest) =>
+      kind === 'ea' ? `<a:ea typeface="${ja}"${rest.replace(/charset="[^"]*"/, 'charset="-128"')}/>` : `<a:${kind} typeface="${latin}"${rest}/>`);
+    xml = xml.replace(/typeface="([^"|]*)\|[^"]*"/g, 'typeface="$1"');
+    if (!xml.includes('name="sc-tile:')) {
+      zip.file(name, xml);
+      continue;
+    }
     const fixed = xml.replace(/<p:pic>[\s\S]*?<\/p:pic>/g, (pic) => {
       const m = pic.match(/name="sc-tile:(\d+)"/);
       if (!m) return pic;

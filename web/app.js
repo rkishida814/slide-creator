@@ -1,7 +1,7 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
-import { renderHTML, FONTS, DEFAULT_FONT } from '../src/core/html.js';
+import { renderHTML, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
 import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, parseBox } from '../src/core/units.js';
@@ -1209,8 +1209,12 @@ function renderGlobal() {
     row('縦横比', ratioIn),
     row('', lockIn),
     row('用紙', paperIn),
-    row('フォント', selectEl(FONT_OPTS, getJS(doc, ['defaults', 'font', 'family']) ?? DEFAULT_FONT, (v) => {
+    row('フォント（英語）', selectEl(FONT_OPTS, getJS(doc, ['defaults', 'font', 'family']) ?? DEFAULT_FONT, (v) => {
       setProp(doc, ['defaults'], ['font', 'family'], v);
+      fileChanged('layout.yaml');
+    })),
+    row('フォント（日本語）', selectEl(JA_FONT_OPTS, getJS(doc, ['defaults', 'font', 'family_ja']) ?? DEFAULT_FONT_JA, (v) => {
+      setProp(doc, ['defaults'], ['font', 'family_ja'], v);
       fileChanged('layout.yaml');
     })),
   );
@@ -1418,7 +1422,8 @@ function textFields(box, node, inh) {
       return unfitTextBelow(box);
     })),
     row('大きさ', h2(numEl(f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, ['font', 'size'], +v)), 'pt')),
-    row('フォント', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
+    row('フォント（英語）', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
+    row('フォント（日本語）', selectEl(JA_FONT_OPTS, f.family_ja ?? fi.family_ja ?? DEFAULT_FONT_JA, (v) => edit(box, ['font', 'family_ja'], v))),
     row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
     row('見出しアイコン', h2(
       selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a.split('/').pop()])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined)),
@@ -1652,6 +1657,7 @@ const KIND_OPTS = [['text', 'テキスト'], ['image', '画像']];
 const FIT_OPTS = [['contain', '切らずに全体を収める'], ['cover', 'ボックスいっぱいに広げ、はみ出た部分を切る'], ['stretch', '縦横比を変えてボックスに合わせる']];
 const H_OPTS = [['left', '左'], ['center', '中央'], ['right', '右']];
 const FONT_OPTS = FONTS.map((f) => [f, f]);
+const JA_FONT_OPTS = JA_FONTS.map((f) => [f, f]);
 const DEFAULT_SIZE = 24; // 文字の大きさの既定（pt）
 const V_OPTS = [['top', '上'], ['middle', '中央'], ['bottom', '下']];
 
