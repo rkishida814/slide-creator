@@ -1,7 +1,7 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
-import { renderHTML, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
+import { renderHTML, loadUsedFonts, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
 import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, parseBox } from '../src/core/units.js';
@@ -2224,12 +2224,13 @@ async function exportPPTX() {
 
 function exportPDF() {
   if (!S.layout) return;
-  const html = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '' });
+  const html = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true });
   const f = document.createElement('iframe');
   f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
   document.body.append(f);
   f.onload = async () => {
-    await f.contentDocument.fonts.ready;
+    // フォントを読み込み終えてから印刷する（待たないと、日本語が別のフォントで PDF に入る）
+    await loadUsedFonts(f.contentDocument);
     await Promise.all([...f.contentDocument.images].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
     f.contentWindow.print();
     setTimeout(() => f.remove(), 1000);

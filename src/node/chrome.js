@@ -28,6 +28,7 @@ async function openProject(project, htmlOpts) {
   fs.mkdirSync(outDir, { recursive: true });
   const html = renderHTML(project.layout, {
     ...htmlOpts,
+    waitFonts: true,
     srcURL: (src) => pathToFileURL(path.join(project.dir, src)).href,
   });
   const htmlFile = path.join(outDir, '.render.html');
@@ -35,7 +36,19 @@ async function openProject(project, htmlOpts) {
   const browser = await puppeteer.launch({ executablePath: chromePath(), headless: true, args: ['--allow-file-access-from-files'] });
   const page = await browser.newPage();
   await page.goto(pathToFileURL(htmlFile).href, { waitUntil: 'load' });
-  await page.evaluate(() => document.fonts.ready);
+  // フォントを、書いてある文字について読み込み終えるまで待つ（html.js の loadUsedFonts と同じ処理）
+  await page.evaluate(async () => {
+    const jobs = [];
+    for (const el of document.querySelectorAll('.txt')) {
+      const cs = getComputedStyle(el);
+      const text = el.textContent || '';
+      if (!text.trim()) continue;
+      const ja = cs.getPropertyValue('--ja').trim();
+      for (const fam of [cs.fontFamily, ja].filter(Boolean)) for (const w of ['400', '700']) jobs.push(document.fonts.load(`${w} 16px ${fam}`, text).catch(() => null));
+    }
+    await Promise.all(jobs);
+    await document.fonts.ready;
+  });
   return { browser, page };
 }
 

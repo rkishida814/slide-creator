@@ -156,7 +156,7 @@ slides:
 - EXIF の回転情報付きの写真は、縦横を入れ替えて計算するが、PPTX での表示は未確認
 - 図形・矢印・表・箇条書きの書式（字下げ）は未対応
 - PPTX の「画像を並べる」背景は、画像を 96 dpi とみなして並べる倍率を決めている。PowerPoint で開いた見え方は未確認
-- BIZ UDPゴシックと Noto Sans JP は、プレビューと PDF では Google Fonts から読み込む。PowerPoint では、その PC に入っているときだけ同じ字形になる
+- BIZ UDPゴシックと Noto Sans JP は、プレビューと PDF では Google Fonts から読み込む（PDF は読み込み終えてから書き出すので、フォントごと入る）。PPTX には英語の名前（BIZ UDPGothic）で書く。PowerPoint では、その PC に入っているときだけ同じ字形になる
 - ブラウザ版で設定欄から書き換えると、YAML の `{a: 1}` が `{ a: 1 }` のように書き直される（意味は同じ）
 
 ## 構成

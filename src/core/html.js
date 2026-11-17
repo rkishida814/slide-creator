@@ -11,7 +11,8 @@ export const JA_FONTS = ['BIZ UDPゴシック', 'ヒラギノ角ゴシック', '
 export const FONTS = [...JA_FONTS, 'Helvetica', 'Arial', 'Times New Roman'];
 // css：ブラウザで使う名前、pptx：PowerPoint に書く名前、web：手元に無いとき Google Fonts から読み込む名前
 const FONT_DEF = {
-  'BIZ UDPゴシック': { css: `'BIZ UDPGothic', 'BIZ UDPゴシック'`, pptx: 'BIZ UDPゴシック', web: 'BIZ+UDPGothic' },
+  // PowerPoint に書く名前は英語の名前にする（Mac で Google Fonts から入れたものも、Windows に入っているものも、この名前で見つかる）
+  'BIZ UDPゴシック': { css: `'BIZ UDPGothic', 'BIZ UDPゴシック'`, pptx: 'BIZ UDPGothic', web: 'BIZ+UDPGothic' },
   'ヒラギノ角ゴシック': { css: `'Hiragino Sans', 'Hiragino Kaku Gothic ProN'`, pptx: 'Hiragino Sans' },
   'Noto Sans JP': { css: `'Noto Sans JP'`, pptx: 'Noto Sans JP', web: 'Noto+Sans+JP' },
   'メイリオ': { css: `'Meiryo', 'メイリオ'`, pptx: 'Meiryo' },
@@ -34,6 +35,23 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&
  * @param layout  layoutDoc の結果
  * @param opts    { srcURL(src) => url, slides: [id]（省略で全部）, outline: bool }
  */
+// 文書で使っているフォントを、実際の文字について読み込み終えるまで待つ（PDF に書き出す前に使う）。
+// フォントは、使う字の部分ごとに分けて配られるので、書いてある文字を渡して読み込ませる
+export async function loadUsedFonts(doc) {
+  const jobs = [];
+  for (const el of doc.querySelectorAll('.txt')) {
+    const cs = doc.defaultView.getComputedStyle(el);
+    const text = el.textContent || '';
+    if (!text.trim()) continue;
+    const ja = cs.getPropertyValue('--ja').trim();
+    for (const fam of [cs.fontFamily, ja].filter(Boolean)) {
+      for (const w of ['400', '700']) jobs.push(doc.fonts.load(`${w} 16px ${fam}`, text).catch(() => null));
+    }
+  }
+  await Promise.all(jobs);
+  await doc.fonts.ready;
+}
+
 export function renderHTML(layout, opts = {}) {
   const u = layout.unit;
   const L = (v) => `${+v.toFixed(4)}${u}`;
@@ -48,7 +66,10 @@ export function renderHTML(layout, opts = {}) {
     }
   }
   const fontLink = [...web]
-    .map((w) => `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=${w}:wght@400;700&display=swap" media="print" onload="this.media='all'">\n`)
+    // PDF に書き出すとき（opts.waitFonts）は、読み込みを待つ形で読み込む
+    .map((w) => (opts.waitFonts
+      ? `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=${w}:wght@400;700&display=block">\n`
+      : `<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=${w}:wght@400;700&display=swap" media="print" onload="this.media='all'">\n`))
     .join('');
 
   const body = slides
