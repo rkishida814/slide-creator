@@ -31,6 +31,25 @@ export function color(c, fallback = '#000000') {
   return /^[0-9a-fA-F]{6}$/.test(s) ? `#${s}` : s;
 }
 
+// 文字の光彩（PowerPoint の「光彩」）。font.glow: true か {color, size（pt）, opacity（0〜1）}。無ければ null
+export function glowOf(f) {
+  const g = f?.glow;
+  if (!g) return null;
+  const o = g === true ? {} : g;
+  return { color: o.color ?? '#ffffff', size: Number(o.size ?? 6), opacity: Number(o.opacity ?? 1) };
+}
+
+// 光彩を CSS の text-shadow で近似する（ぼかしの小さい影を重ねて濃くし、外側を半径 size までぼかす）
+function glowCSS(g) {
+  const c = color(g.color, '#ffffff');
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(c);
+  const col = m
+    ? `rgba(${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)},${g.opacity})`
+    : c;
+  const r = g.size;
+  return [0.12, 0.12, 0.2, 0.2, 0.3, 0.3, 0.45, 0.65, 1].map((b) => `0 0 ${(r * b).toFixed(2)}pt ${col}`).join(',');
+}
+
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 
 /**
@@ -150,6 +169,7 @@ function renderElement(e, L, opts) {
       `font-style:${f.italic ? 'italic' : 'normal'}`,
       `color:${color(f.color, '#000000')}`,
       `line-height:${e.line_height}`,
+      ...(glowOf(f) ? [`text-shadow:${glowCSS(glowOf(f))}`] : []),
     ].join(';');
     const paras = paragraphs(e.text)
       .map((p, i) => `<div class="pa"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p)) || '<br>'}</div>`)

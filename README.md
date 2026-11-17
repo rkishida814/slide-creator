@@ -101,7 +101,7 @@ slides:
 | 画像 | `image: a.png` | |
 | | `crop: [左, 上, 右, 下]` | 元画像に対する割合（0〜1）。`[0.1, 0, 0.9, 1]` は左右10%ずつ切る |
 | | `fit: contain / cover / stretch` | contain は切らずに収める、cover は枠いっぱいにしてはみ出しを切る、stretch は伸ばす |
-| 文字 | `text: "1行目\n2行目"` | `font: {size, bold, italic, color, family, family_ja}`（family は英語用、family_ja は日本語用のフォント）、`line_height: 1.2`。文字の左に見出しアイコンを置くときは `icon: x.png`（高さは `icon_size` で pt。省くと文字の大きさ）。文字の一部の飾りは `<b>太字</b>` `<i>斜体</i>` `<sup>上付き</sup>` `<sub>下付き</sub>`（例：`mm<sup>2</sup>`）。改行（`\n`）は段落の区切りで、`para_space`（pt）の間隔が足される。段落の中の改行は `<br>`（行間だけ） |
+| 文字 | `text: "1行目\n2行目"` | `font: {size, bold, italic, color, family, family_ja, glow}`（family は英語用、family_ja は日本語用のフォント。glow は文字の光彩で、`glow: true`（白・6 pt）か `glow: {color: "#ffffff", size: 6, opacity: 1}`。size は pt、opacity は 0〜1。PPTX では PowerPoint の「光彩」になる。画面・PDF は影を重ねた近似）、`line_height: 1.2`。文字の左に見出しアイコンを置くときは `icon: x.png`（高さは `icon_size` で pt。省くと文字の大きさ）。文字の一部の飾りは `<b>太字</b>` `<i>斜体</i>` `<sup>上付き</sup>` `<sub>下付き</sub>`（例：`mm<sup>2</sup>`）。改行（`\n`）は段落の区切りで、`para_space`（pt）の間隔が足される。段落の中の改行は `<br>`（行間だけ） |
 | 空き | 何も書かない（`{}` や `~`） | |
 
 どのノードにも書けるもの：

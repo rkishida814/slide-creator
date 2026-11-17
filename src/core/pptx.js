@@ -3,7 +3,7 @@
 // 文字はテキストボックス（余白0・自動調整なし）。
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
-import { DEFAULT_FONT, DEFAULT_FONT_JA, pptxFontName } from './html.js';
+import { DEFAULT_FONT, DEFAULT_FONT_JA, pptxFontName, glowOf } from './html.js';
 import { parseRich, hasRich, paragraphs } from './richtext.js';
 
 const hex = (c, fb) => {
@@ -59,7 +59,10 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
         slide.addImage({ ...(await imageRef(e.src)), ...box, objectName: `sc-tile:${scale}`, altText: e.path });
       } else if (e.type === 'text') {
         const f = e.font;
-        slide.addText(textRuns(e.text, f, e.para_space), {
+        const g = glowOf(f);
+        const glow = g ? { color: hex(g.color, 'FFFFFF'), size: g.size, opacity: g.opacity } : undefined;
+        slide.addText(textRuns(e.text, f, e.para_space, glow), {
+          ...(glow ? { glow } : {}),
           ...box,
           // 英語用と日本語用を「|」でつないで渡し、書き出した後で分ける（finishPPTX）
           fontFace: `${pptxFontName(f.family || DEFAULT_FONT)}|${pptxFontName(f.family_ja || DEFAULT_FONT_JA)}`,
@@ -82,8 +85,8 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
 }
 
 // 飾りも改行も無い文字はそのまま。あれば、区切り（run）の配列にする
-function textRuns(text, f, paraSpace) {
-  if (!hasRich(text)) return text;
+function textRuns(text, f, paraSpace, glow) {
+  if (!hasRich(text)) return glow ? [{ text, options: { glow } }] : text;
   const runs = [];
   const paras = paragraphs(text);
   paras.forEach((p, pi) => {
@@ -95,6 +98,7 @@ function textRuns(text, f, paraSpace) {
         continue;
       }
       const options = {};
+      if (glow) options.glow = glow;
       if (g.b || f.bold) options.bold = true;
       if (g.i || f.italic) options.italic = true;
       if (g.sup) options.superscript = true;
