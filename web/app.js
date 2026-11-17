@@ -763,6 +763,15 @@ function writeEntries(lca, list) {
 function removeInSplit(lca, selSet) {
   const r = splitEntries(lca, selSet);
   if (!r) return status('この範囲は削除できません。', true);
+  // 消す範囲が組（同じ向きの分割）のいちばん下・右で、その組の外側に、見た目ですぐ下・右のボックスがあるときは、
+  // 外側の並びで扱い、そのボックスを伸ばす（例：タイトルの下に分けた空きを消すと、さらに下のボックスが上に伸びる）
+  if (r.i1 + 1 >= r.entries.length && lca.parent) {
+    const up = findBox(lca.parent);
+    if (up && up.kind === 'split' && up.src && up.node.split === lca.node.split) {
+      const r2 = splitEntries(up, selSet);
+      if (r2 && r2.i1 + 1 < r2.entries.length) return removeInSplit(up, selSet);
+    }
+  }
   const { entries, i0, i1, gap, k, u } = r;
   const rest = entries.filter((_, i) => i < i0 || i > i1);
   if (!rest.length) return status('全部は削除できません。1 つ以上残してください', true);
