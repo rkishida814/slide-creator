@@ -324,8 +324,26 @@ function imageHasGap(box) {
   return box.rect.h - pad.t - pad.b - el.rect.h > 0.01;
 }
 
-// 複数の画像のボックスを、1 つずつ詰める（詰めるたびに描き直されるので、順に待つ）
+const L_rows = (b) => b.rect.h;
+
+// 複数の画像のボックスを詰める。左右に並ぶ段の画像なら、段全体を、いちばん高い画像に合わせて縮める。
+// それ以外は 1 つずつ詰める（詰めるたびに描き直されるので、順に待つ）
 async function fitImagesBelow(paths) {
+  const boxes = paths.map(findBox).filter(Boolean);
+  const lca = boxes.length > 1 ? commonAncestor(boxes) : null;
+  if (lca && lca.kind === 'split' && lca.node.split === 'cols') {
+    const needOf = (b) => {
+      const el = curSlide().elements.find((e) => e.path === b.path && e.type === 'image');
+      const pad = parseBox((b.node || {}).padding, S.layout.unit);
+      return el ? el.rect.h + pad.t + pad.b : b.rect.h;
+    };
+    const need = Math.ceil(Math.max(...boxes.map(needOf)) * 100) / 100;
+    const cur = Math.max(...boxes.map((b) => b.rect.h));
+    if (cur - need < 0.01) return status('画像の上下に余白はありません。');
+    const r = resizeSelectionCross(lca, 'rows', need - cur);
+    if (r && r.then) await r;
+    return status('画像の上下の余白を詰めました');
+  }
   for (const p of paths) {
     const b = findBox(p);
     if (!b || b.kind !== 'image' || !imageHasGap(b)) continue;
@@ -342,7 +360,10 @@ function fitImageBelow(box) {
   const pad = parseBox((box.node || {}).padding, u);
   const need = Math.ceil((el.rect.h + pad.t + pad.b) * 100) / 100;
   if (box.rect.h - need < 0.01) return status('画像の上下に余白はありません。');
-  return fitBoxHeight(box, need, 0.01);
+  // 空きのボックスは作らない。ボックスを縮め、空いた分はすぐ下のボックスが受け取る（下のボックスが上に伸びる）
+  const c = sizeCtrl(box, 'rows');
+  if (!c) return status('このボックスの高さは変えられません。', true);
+  return resizeAlong(c, 'rows', c.child.path === box.path ? need : L_rows(c.child) - (box.rect.h - need));
 }
 
 // ボックスの高さを need にする。すでに上下の分割で高さが長さで決まり、すぐ下が空きなら、高さだけ合わせ直す。
