@@ -394,6 +394,7 @@ function applyView() {
   selEl.style.background = 'rgba(37, 99, 235, .08)';
   const one = S.selected ? findBox(S.selected) : null;
   $('#btn-split').disabled = !(one && one.src && isLeaf(one));
+  $('#btn-merge').disabled = !((S.sel || []).length > 1 && selectionUnit());
   $('#btn-delete').disabled = !((S.sel || []).length > 1 ? selectionUnit() : one && canRemove(one));
 }
 
@@ -580,6 +581,47 @@ function removeSelection() {
   const idx = [];
   for (let i = u.i0; i <= u.i1; i++) idx.push(i);
   return removeFromParent(u.lca, idx);
+}
+
+// ドラッグで選んだ範囲を 1 つのボックスにまとめる。
+// 内容は、選んだ中で最初の内容のあるボックスのものを使う（ほかに内容があれば、確かめてから消す）
+function mergeSelection() {
+  const u = selectionUnit();
+  if (!u || (S.sel || []).length < 2) return;
+  const slide = curSlide();
+  const order = (b) => slide.boxes.indexOf(b);
+  const leaves = (S.sel || []).map(findBox).filter(Boolean).sort((a, b) => order(a) - order(b));
+  const filled = leaves.filter((b) => b.kind === 'image' || b.kind === 'text');
+  if (filled.length > 1 && !confirm('内容は、選んだ中でいちばん上か左にあるボックスのものだけを残し、ほかは消します。まとめますか？')) return;
+  let node = filled.length ? writtenNode(filled[0]) : {};
+  if (typeof node === 'string') node = { text: node };
+  delete node.id;
+  if (u.kind === 'range') {
+    const done = replaceRange(u.lca, u.kids, u.i0, u.i1, node);
+    if (done && done.then) done.then(() => status('まとめました'));
+    return done;
+  }
+  const box = u.box;
+  if (box.kind === 'grid') {
+    const kids = slide.boxes.filter((b) => b.parent === box.path);
+    const r = selectionRect();
+    if (!kids.every((k) => overlaps(k.rect, r))) return status('格子の一部のセルは、まとめられません。', true);
+  }
+  if (!box.src) return status('このボックスは、まとめられません。', true);
+  const { file, path, mode } = box.src;
+  const doc = S.files[file].doc;
+  const cur = getJS(doc, path) || {};
+  const keep = cur && typeof cur === 'object' ? Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k))) : {};
+  // 外側の枠に余白が残っていて、使う内容に余白が無ければ、外側の余白を引き継ぐ（見た目を変えないため）
+  if (cur && cur.padding != null && node.padding == null) node.padding = cur.padding;
+  if (mode === 'direct') replaceNode(doc, path, { ...node, ...keep });
+  else {
+    // テンプレートの値を打ち消すため、使わない種類の中身は null にする
+    for (const k of CONTENT_KEYS) setProp(doc, path, k, k in node ? node[k] : null);
+    for (const [k, v] of Object.entries(node)) if (!CONTENT_KEYS.includes(k)) setProp(doc, path, k, v);
+  }
+  setSel([]);
+  return fileChanged(file).then(() => status('まとめました'));
 }
 
 // 分割・格子 parent の idx 番目の部分を消す。分割の中が 1 つだけ残ったら、分割をやめて外側の位置に置く
@@ -881,11 +923,12 @@ function pasteSelection() {
 
 // 分割 lca の i0〜i1 番目を、1 つのノードに置き換える（外側での大きさは、置き換える部分の合計）
 function replaceRange(lca, kids, i0, i1, node) {
-  if (lca.src.mode !== 'direct') return status('テンプレートの一部には貼り付けられません。', true);
+  if (!lca.src) return status('この範囲には貼り付けられません。', true);
   const doc = S.files[lca.src.file].doc;
   const path = lca.src.path;
   const n = kids.length;
-  const children = getJS(doc, [...path, 'children']);
+  // テンプレートから来た枠では、展開した中身を書き戻す
+  const children = lca.src.mode === 'direct' ? getJS(doc, [...path, 'children']) : plain(lca.node.children || []);
   if (!Array.isArray(children) || children.length !== n) return status('この範囲には貼り付けられません。', true);
   const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? [...lca.node.ratio] : Array(n).fill(1);
   const subR = ratio.slice(i0, i1 + 1);
@@ -894,7 +937,12 @@ function replaceRange(lca, kids, i0, i1, node) {
   let outer;
   if (subR.every((x) => typeof x === 'number')) outer = subR.reduce((a, x) => a + x, 0);
   else if (subR.every((x) => typeof x === 'string')) outer = `${Math.round((subR.reduce((a, x) => a + toUnit(x, u), 0) + gap * (subR.length - 1)) * 1000) / 1000}${u}`;
-  else return status('比率と長さが混ざった範囲には貼り付けられません。', true);
+  else {
+    // 比率と長さが混ざっているときは、いま画面に出ている長さで置き換える
+    const a = kids[i0].rect, b = kids[i1].rect;
+    const len = lca.node.split === 'cols' ? b.x + b.w - a.x : b.y + b.h - a.y;
+    outer = `${Math.round(len * 1000) / 1000}${u}`;
+  }
   children.splice(i0, subR.length, node);
   ratio.splice(i0, subR.length, outer);
   setProp(doc, path, 'children', children);
@@ -1772,6 +1820,7 @@ $('#btn-save').onclick = save;
 $('#btn-pptx').onclick = exportPPTX;
 $('#btn-pdf').onclick = exportPDF;
 $('#btn-split').onclick = openSplitDialog;
+$('#btn-merge').onclick = () => mergeSelection();
 $('#btn-delete').onclick = () => removeSelection();
 $('#zoom').oninput = (e) => {
   setZoom(+e.target.value / 100);
