@@ -742,8 +742,10 @@ function renderMulti(el) {
     el.append(fs);
   }
 
-  const fsBg = fieldset('背景（選んだ範囲全体）');
+  const fsBg = fieldset(all ? '余白・背景（選んだ範囲全体）' : '背景（選んだ範囲全体）');
   if (all) {
+    // 選んだ範囲が外側の枠 1 つ分にちょうど重なるときは、その枠の余白も出す（クリックでは選べない枠のため）
+    fsBg.append(paddingRow(lca, lca.node || {}));
     fsBg.append(...bgRows(lca.node.background, (v) => edit(lca, 'background', v)));
   } else if (lca.kind === 'split') {
     fsBg.append(...bgRows(undefined, (v) => v && groupWithBackground(lca, kids, covered[0][1], covered[covered.length - 1][1], v)));
