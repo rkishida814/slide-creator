@@ -21,6 +21,12 @@ export function convert(value, from, to) {
   return (value / PER_INCH[from]) * PER_INCH[to];
 }
 
+// テキストのボックス（と、テキストを入れる前の空のボックス）で padding を書かないときの余白：上と左に 0.5 cm
+export const TEXT_PADDING = ['0.5cm', 0, 0, '0.5cm'];
+export function defaultPadding(kind) {
+  return kind === 'text' || kind === 'empty' ? TEXT_PADDING : null;
+}
+
 // padding: 数値 / [上下, 左右] / [上, 右, 下, 左]
 export function parseBox(value, unit) {
   if (value == null) return { t: 0, r: 0, b: 0, l: 0 };

@@ -1,7 +1,7 @@
 // 配置の計算。layout.yaml（テンプレート展開済み）を受け取り、各ノードの枠と、
 // 描く要素（rect / image / text）の絶対座標をキャンバスの単位で返す。
 // ファイルやブラウザに依存しない（ブラウザ版でもそのまま使う）。
-import { assertUnit, toUnit, parseBox } from './units.js';
+import { assertUnit, toUnit, parseBox, defaultPadding } from './units.js';
 
 // 親から子へ引き継ぐ設定
 const INHERIT = ['align', 'valign', 'fit', 'font', 'line_height', 'para_space'];
@@ -75,7 +75,7 @@ function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
   const style = pickInherit(node, inherited);
   // 画面の設定欄で使う（JSON には出さない）
   Object.defineProperties(box, { node: { value: node }, inherited: { value: inherited }, style: { value: style } });
-  const pad = parseBox(node.padding, ctx.unit);
+  const pad = parseBox(node.padding ?? defaultPadding(kind), ctx.unit);
   const inner = { x: rect.x + pad.l, y: rect.y + pad.t, w: rect.w - pad.l - pad.r, h: rect.h - pad.t - pad.b };
   // background_inset: true なら、背景と枠線も余白の分だけ内側に縮める
   const bgRect = node.background_inset && inner.w > 0 && inner.h > 0 ? inner : rect;

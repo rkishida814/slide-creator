@@ -4,7 +4,7 @@ import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, FONTS, DEFAULT_FONT } from '../src/core/html.js';
 import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
-import { PER_INCH, toUnit } from '../src/core/units.js';
+import { PER_INCH, toUnit, defaultPadding } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
@@ -752,7 +752,11 @@ function renderProps() {
 
 // 内側の余白。上・右・下・左の 4 つを 1 行で
 function paddingRow(box, node) {
-  const p = node.padding;
+  // テキストのボックスで余白を書いていないときは、決まった余白（上と左に 0.5 cm）を出す
+  const def = defaultPadding(box.kind);
+  const u = S.layout.unit;
+  const defV = def ? def.map((x) => Math.round(toUnit(x, u) * 1000) / 1000) : null;
+  const p = node.padding ?? defV;
   let v;
   if (Array.isArray(p)) v = p.length === 2 ? [p[0], p[1], p[0], p[1]] : [p[0], p[1], p[2], p[3]];
   else v = [p ?? 0, p ?? 0, p ?? 0, p ?? 0];
@@ -763,7 +767,10 @@ function paddingRow(box, node) {
     const inp = numEl(v[k] ?? 0, '0', (x) => {
       v[k] = x === '' ? 0 : +x;
       const a = v.map((y) => +y || 0);
-      edit(box, 'padding', a.every((y) => y === a[0]) ? a[0] || undefined : a);
+      let out = a.every((y) => y === a[0]) ? a[0] : a;
+      // 決まった余白と同じなら書かない。テキストのボックスで 0 にしたときは、0 と書いて残す
+      if (defV ? a.every((y, k) => y === defV[k]) : out === 0) out = undefined;
+      edit(box, 'padding', out);
     });
     wrap.append(ic, inp);
   });
