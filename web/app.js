@@ -659,10 +659,124 @@ function hasContent(box) {
   return slide.boxes.some((b) => (b.kind === 'image' || b.kind === 'text') && inside(b));
 }
 
+// ---- 分割の中の、選んだ範囲を正確に扱う
+// 分割 lca の部分を、選んだボックス selSet で「全部選んだ／選んでいない」に分けて並べる。
+// 一部だけ選んだ部分が同じ向きの分割なら、その中身を lca の並びに展開する（例：タイトル＋下の空き の組の、空きだけを選んだとき）。
+// 返す並び：[{ node（YAML に書く中身）, ratio（比率の数か長さの文字列）, len（いまの長さ）, sel }]
+const round4 = (x) => Math.round(x * 10000) / 10000;
+const round2 = (x) => Math.round(x * 100) / 100;
+function within(b, box) {
+  for (let x = b; x; x = x.parent ? findBox(x.parent) : null) if (x.path === box.path) return true;
+  return false;
+}
+function splitEntries(lca, selSet) {
+  const u = S.layout.unit;
+  const dir = lca.node.split;
+  const L = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
+  const slide = curSlide();
+  const kids = slide.boxes.filter((b) => b.parent === lca.path);
+  const n = kids.length;
+  const doc = S.files[lca.src.file].doc;
+  const written = lca.src.mode === 'direct' ? getJS(doc, [...lca.src.path, 'children']) : null;
+  const nodes = Array.isArray(written) && written.length === n ? written : plain(lca.node.children || []);
+  const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? lca.node.ratio : Array(n).fill(1);
+  const gap = toUnit(lca.node.gap ?? 0, u);
+  // 比率 1 あたりの長さ
+  let k = null;
+  kids.forEach((b, i) => {
+    if (k == null && typeof ratio[i] === 'number' && ratio[i] > 0) k = L(b) / ratio[i];
+  });
+  const state = (box) => {
+    const ls = slide.boxes.filter((b) => isLeaf(b) && within(b, box));
+    const c = ls.filter((l) => selSet.has(l.path)).length;
+    return c === 0 ? 'none' : c === ls.length ? 'all' : 'part';
+  };
+  const out = [];
+  const add = (box, node, r) => {
+    const st = state(box);
+    if (st !== 'part') {
+      out.push({ node, ratio: r, len: L(box), sel: st === 'all' });
+      return true;
+    }
+    // 一部だけ選んだ部分：同じ向きの分割で、名前・余白・背景などが付いていなければ、中身を展開する
+    const nd = node && typeof node === 'object' ? node : null;
+    const ok = ['split', 'ratio', 'children', 'gap', 'id', 'split_below'];
+    if (!nd || nd.split !== dir || !Array.isArray(nd.children) || Object.entries(nd).some(([x, v]) => v != null && !ok.includes(x))) return false;
+    if (Math.abs(toUnit(nd.gap ?? 0, u) - gap) > 1e-6) return false;
+    const subs = slide.boxes.filter((b) => b.parent === box.path);
+    if (subs.length !== nd.children.length) return false;
+    const sr = Array.isArray(nd.ratio) && nd.ratio.length === subs.length ? nd.ratio : Array(subs.length).fill(1);
+    for (let j = 0; j < subs.length; j++) {
+      const r2 = typeof sr[j] === 'string' ? sr[j] : k ? round4(L(subs[j]) / k) : `${round2(L(subs[j]))}${u}`;
+      if (!add(subs[j], nd.children[j], r2)) return false;
+    }
+    return true;
+  };
+  for (let i = 0; i < n; i++) if (!add(kids[i], nodes[i], ratio[i])) return null;
+  const idx = out.map((e, i) => (e.sel ? i : -1)).filter((i) => i >= 0);
+  if (!idx.length) return null;
+  const i0 = idx[0];
+  const i1 = idx[idx.length - 1];
+  if (i1 - i0 + 1 !== idx.length) return null; // 選んだ部分が続いていない
+  return { entries: out, i0, i1, gap, k, u };
+}
+
+// 並びを分割 lca に書き戻す。1 つだけになったら、分割をやめてその 1 つを lca の位置に置く
+function writeEntries(lca, list) {
+  const { file, path, mode } = lca.src;
+  const doc = S.files[file].doc;
+  if (list.length === 1) {
+    let child = list[0].node;
+    if (typeof child === 'string') child = { text: child };
+    child = structuredClone(child || {});
+    const cur = getJS(doc, path) || {};
+    // 外側の枠に余白が残っていて、残す中身に余白が無ければ、外側の余白を引き継ぐ（見た目を変えないため）
+    if (cur && cur.padding != null && child.padding == null) child.padding = cur.padding;
+    if (mode === 'direct') {
+      const keep = Object.fromEntries(Object.entries(cur).filter(([x]) => FRAME_KEYS.includes(x)));
+      replaceNode(doc, path, { ...child, ...keep });
+    } else {
+      // テンプレートの値を打ち消すため、使わない種類の中身は null にする
+      for (const x of CONTENT_KEYS) setProp(doc, path, x, x in child ? child[x] : null);
+      for (const [x, v] of Object.entries(child)) if (!CONTENT_KEYS.includes(x) && !FRAME_KEYS.includes(x)) setProp(doc, path, x, v);
+    }
+  } else {
+    setProp(doc, path, 'children', list.map((e) => e.node));
+    setProp(doc, path, 'ratio', list.map((e) => e.ratio));
+  }
+  setSel([]);
+  return fileChanged(file);
+}
+
+// 分割 lca の中の選んだ範囲を消し、消した場所を、すぐ下（右）のボックスが伸びて埋める（いちばん下なら、すぐ上が伸びる）。
+// ほかのボックスの大きさは変えない
+function removeInSplit(lca, selSet) {
+  const r = splitEntries(lca, selSet);
+  if (!r) return status('この範囲は削除できません。', true);
+  const { entries, i0, i1, gap, k, u } = r;
+  const rest = entries.filter((_, i) => i < i0 || i > i1);
+  if (!rest.length) return status('全部は削除できません。1 つ以上残してください', true);
+  const j = i1 + 1 < entries.length ? i1 + 1 : i0 - 1;
+  const nb = { ...entries[j] };
+  const removed = entries.slice(i0, i1 + 1);
+  const freed = removed.reduce((a, e) => a + e.len, 0) + gap * removed.length;
+  if (typeof nb.ratio === 'number' && k) {
+    // 比率 1 あたりの長さ（k）を変えずに、空いた長さの分だけ比率を足す
+    const fixedLen = removed.filter((e) => typeof e.ratio === 'string').reduce((a, e) => a + e.len, 0);
+    const num = removed.filter((e) => typeof e.ratio === 'number').reduce((a, e) => a + e.ratio, 0);
+    nb.ratio = round4(nb.ratio + num + (fixedLen + gap * removed.length) / k);
+  } else {
+    nb.ratio = `${round2(nb.len + freed)}${u}`;
+  }
+  const list = entries.map((e, i) => (i === j ? nb : e)).filter((_, i) => i < i0 || i > i1);
+  return writeEntries(lca, list);
+}
+
 function removeBox(box) {
   if (!canRemove(box)) return;
   if (hasContent(box) && !confirm('このボックスと中身を消しますか？')) return;
   const parent = findBox(box.parent);
+  if (parent.kind === 'split') return removeInSplit(parent, new Set(curSlide().boxes.filter((b) => isLeaf(b) && within(b, box)).map((b) => b.path)));
   const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
   const i = sibs.findIndex((b) => b.path === box.path);
   return removeFromParent(parent, [i]);
@@ -672,19 +786,28 @@ function removeBox(box) {
 function removeSelection() {
   const u = selectionUnit();
   if (!u) return;
-  if (u.kind === 'node') {
+  if ((S.sel || []).length < 2) {
     if (!canRemove(u.box)) return status('このボックスは削除できません（スライド全体のボックスは消せません）', true);
     return removeBox(u.box);
   }
+  const lca = u.kind === 'range' ? u.lca : u.box;
   const boxes = (S.sel || []).map(findBox).filter(Boolean);
   if (boxes.some(hasContent) && !confirm('選んだボックスと中身を消しますか？')) return;
-  const idx = [];
-  for (let i = u.i0; i <= u.i1; i++) idx.push(i);
-  return removeFromParent(u.lca, idx);
+  const sel = new Set(S.sel);
+  // 分割の中身を全部選んだときは、その分割ごと消す
+  const all = curSlide().boxes.filter((b) => isLeaf(b) && within(b, lca)).every((l) => sel.has(l.path));
+  if (all && canRemove(lca)) {
+    const parent = findBox(lca.parent);
+    if (parent.kind === 'split') return removeInSplit(parent, sel);
+    const sibs = curSlide().boxes.filter((b) => b.parent === parent.path);
+    return removeFromParent(parent, [sibs.findIndex((b) => b.path === lca.path)]);
+  }
+  if (lca.kind === 'split' && lca.src) return removeInSplit(lca, sel);
+  return status('この範囲は削除できません。', true);
 }
 
-// ドラッグで選んだ範囲を 1 つのボックスにまとめる。
-// 内容は、選んだ中で最初の内容のあるボックスのものを使う（ほかに内容があれば、確かめてから消す）
+// ドラッグで選んだ範囲を 1 つのボックスにまとめる。選んでいないボックスは、そのまま残す。
+// 内容は、選んだ中でいちばん上か左にある、内容のあるボックスのものを使う（ほかに内容があれば、確かめてから消す）
 function mergeSelection() {
   const u = selectionUnit();
   if (!u || (S.sel || []).length < 2) return;
@@ -696,32 +819,25 @@ function mergeSelection() {
   let node = filled.length ? writtenNode(filled[0]) : {};
   if (typeof node === 'string') node = { text: node };
   delete node.id;
-  if (u.kind === 'range') {
-    const done = replaceRange(u.lca, u.kids, u.i0, u.i1, node);
-    if (done && done.then) done.then(() => status('まとめました'));
-    return done;
+  const lca = u.kind === 'range' ? u.lca : u.box;
+  if (!lca.src) return status('このボックスは、まとめられません。', true);
+  if (lca.kind === 'split') {
+    const r = splitEntries(lca, new Set(S.sel));
+    if (!r) return status('この範囲は、まとめられません。', true);
+    const { entries, i0, i1, gap, u: unit } = r;
+    const part = entries.slice(i0, i1 + 1);
+    const ratio = part.every((e) => typeof e.ratio === 'number')
+      ? round4(part.reduce((a, e) => a + e.ratio, 0))
+      : `${round2(part.reduce((a, e) => a + e.len, 0) + gap * (part.length - 1))}${unit}`;
+    const list = [...entries.slice(0, i0), { node, ratio }, ...entries.slice(i1 + 1)];
+    return writeEntries(lca, list).then(() => status('まとめました'));
   }
-  const box = u.box;
-  if (box.kind === 'grid') {
-    const kids = slide.boxes.filter((b) => b.parent === box.path);
-    const r = selectionRect();
-    if (!kids.every((k) => overlaps(k.rect, r))) return status('格子の一部のセルは、まとめられません。', true);
+  // 格子：全部のセルを選んだときだけ、1 つにまとめる
+  const kids = slide.boxes.filter((b) => b.parent === lca.path);
+  if (!kids.every((kb) => within(kb, lca) && slide.boxes.filter((b) => isLeaf(b) && within(b, kb)).every((l) => S.sel.includes(l.path)))) {
+    return status('格子の一部のセルは、まとめられません。', true);
   }
-  if (!box.src) return status('このボックスは、まとめられません。', true);
-  const { file, path, mode } = box.src;
-  const doc = S.files[file].doc;
-  const cur = getJS(doc, path) || {};
-  const keep = cur && typeof cur === 'object' ? Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k))) : {};
-  // 外側の枠に余白が残っていて、使う内容に余白が無ければ、外側の余白を引き継ぐ（見た目を変えないため）
-  if (cur && cur.padding != null && node.padding == null) node.padding = cur.padding;
-  if (mode === 'direct') replaceNode(doc, path, { ...node, ...keep });
-  else {
-    // テンプレートの値を打ち消すため、使わない種類の中身は null にする
-    for (const k of CONTENT_KEYS) setProp(doc, path, k, k in node ? node[k] : null);
-    for (const [k, v] of Object.entries(node)) if (!CONTENT_KEYS.includes(k)) setProp(doc, path, k, v);
-  }
-  setSel([]);
-  return fileChanged(file).then(() => status('まとめました'));
+  return writeEntries(lca, [{ node }]).then(() => status('まとめました'));
 }
 
 // 分割・格子 parent の idx 番目の部分を消す。分割の中が 1 つだけ残ったら、分割をやめて外側の位置に置く
