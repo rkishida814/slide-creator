@@ -303,6 +303,25 @@ function fitTextBelow(path, doc) {
   const textH = el.firstElementChild.getBoundingClientRect().height / (S.ppu * S.view.s);
   const pad = parseBox(node.padding ?? defaultPadding('text'), u);
   const need = Math.ceil((textH + pad.t + pad.b) * 100) / 100;
+  return fitBoxHeight(box, need, toUnit('0.5cm', u));
+}
+
+// 画像のボックスの高さを、表示している画像の高さ（余白を含む）まで縮め、下に余った部分を別のボックス（空き）にする
+function fitImageBelow(box) {
+  const el = curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
+  if (!el) return;
+  const u = S.layout.unit;
+  const pad = parseBox((box.node || {}).padding, u);
+  const need = Math.ceil((el.rect.h + pad.t + pad.b) * 100) / 100;
+  if (box.rect.h - need < 0.01) return status('画像の上下に余白はありません。');
+  return fitBoxHeight(box, need, 0.01);
+}
+
+// ボックスの高さを need にする。すでに上下の分割で高さが長さで決まり、すぐ下が空きなら、高さだけ合わせ直す。
+// そうでなければ、上下に分けて下を空きにする（余りが minRest に満たないときは分けない）
+function fitBoxHeight(box, need, minRest) {
+  const u = S.layout.unit;
+  const path = box.path;
   const len = `${need}${u}`;
   const parent = box.parent ? findBox(box.parent) : null;
   const sibs = parent ? curSlide().boxes.filter((b) => b.parent === parent.path) : [];
@@ -320,7 +339,7 @@ function fitTextBelow(path, doc) {
     return edit(parent, 'ratio', ratio);
   }
   // 余りが 0.5 cm に満たないときは分けない
-  if (box.rect.h - need < toUnit('0.5cm', u)) return;
+  if (box.rect.h - need < minRest) return;
   const { file, path: ypath, mode } = box.src;
   const ydoc = S.files[file].doc;
   let pn = writtenNode(box);
@@ -1837,6 +1856,8 @@ function imageFields(box, node, inh) {
   );
   const acts = h('div', 'actions');
   acts.append(btn('画像を見ながらトリミング…', () => cropDialog(box, node, el)));
+  // 画像の上下に隙間があるときだけ、詰めるボタンを出す
+  if (el && box.rect.h - el.rect.h > 0.01) acts.append(btn('画像の上下の余白を詰める', () => fitImageBelow(box)));
   if (node.crop) acts.append(btn('トリミングを外す', () => edit(box, 'crop', undefined)));
   fs.append(acts);
   if (el) fs.append(h('div', 'note', `元画像 ${el.natural.w} × ${el.natural.h} px、表示する大きさ ${fmt(el.rect.w)} × ${fmt(el.rect.h)} ${S.layout.unit}、解像度 ${el.dpi} dpi`));
