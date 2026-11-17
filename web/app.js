@@ -749,7 +749,7 @@ function within(b, box) {
   for (let x = b; x; x = x.parent ? findBox(x.parent) : null) if (x.path === box.path) return true;
   return false;
 }
-function splitEntries(lca, selSet) {
+function splitEntries(lca, selSet, opts = {}) {
   const u = S.layout.unit;
   const dir = lca.node.split;
   const L = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
@@ -774,7 +774,9 @@ function splitEntries(lca, selSet) {
   const out = [];
   const add = (box, node, r) => {
     const st = state(box);
-    if (st !== 'part') {
+    // opts.expandAll：全部選んだ組でも、同じ向きの組なら展開する（比率を部分ごとに出すため）
+    const sameDir = node && typeof node === 'object' && node.split === dir && Array.isArray(node.children);
+    if (st !== 'part' && !(opts.expandAll && st === 'all' && sameDir)) {
       out.push({ node, ratio: r, len: L(box), sel: st === 'all', box });
       return true;
     }
@@ -1398,22 +1400,24 @@ function renderMulti(el) {
   if (lca.src.mode === 'shared') el.append(h('p', 'warn', 'このボックスは、複数のスライドで共通に使うボックスの組み合わせ（テンプレート）の一部です。変えると、このテンプレートを使う全てのスライドが変わります。'));
   el.append(multiSizeFields(lca, r, all));
 
-  if (lca.kind === 'split' && covered.length >= 2) {
-    const n = kids.length;
-    const ratio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === n ? [...lca.node.ratio] : Array(n).fill(1);
+  // 選んだ部分どうしの比率。同じ向きに分けた組が入れ子になっていても、外側の並びに展開して、選んだ部分の数だけ出す
+  const ent = lca.kind === 'split' ? splitEntries(lca, new Set(S.sel), { expandAll: true }) || splitEntries(lca, new Set(S.sel)) : null;
+  if (ent && ent.i1 - ent.i0 + 1 >= 2) {
+    const { entries, i0, i1 } = ent;
+    const ratio = entries.map((e) => (typeof e.ratio === 'number' ? Math.round(e.ratio * 10000) / 10000 : e.ratio));
     const parts = [];
-    covered.forEach(([, i], j) => {
-      if (j) parts.push(h('span', 'ratio-sep', ':'));
+    for (let i = i0; i <= i1; i++) {
+      if (i > i0) parts.push(h('span', 'ratio-sep', ':'));
       const t = textEl(String(ratio[i]), '1', (x) => {
         const pv = parseLen(x);
         if (pv === undefined) return;
         ratio[i] = pv;
         keepOneFlexible(ratio, i);
-        edit(lca, 'ratio', ratio);
+        setRatioEntries(lca, entries, ratio);
       });
       t.className = 'ratio-in';
       parts.push(t);
-    });
+    }
     const fs = fieldset(lca.node.split === 'rows' ? '上下の比率' : '左右の比率');
     fs.append(h2(...parts), h('div', 'note', `${lca.node.split === 'rows' ? '上から' : '左から'}順に並ぶ。「3cm」のように単位を付けると、その長さに固定される`));
     el.append(fs);
@@ -1570,6 +1574,28 @@ function setRangeLength(lca, total) {
     return edit(lca, 'ratio', list.map((e) => e.ratio));
   }
   return writeEntries(lca, list);
+}
+
+// 並び lca に、展開した部分の一覧 entries と比率 ratio を書き戻す。
+// 入れ子の組を展開したときは並びが組み替わるので、同じ範囲のボックスを選び直す
+function setRatioEntries(lca, entries, ratio) {
+  const kids = curSlide().boxes.filter((b) => b.parent === lca.path);
+  if (entries.length === kids.length) return edit(lca, 'ratio', ratio);
+  const { file, path } = lca.src;
+  const doc = S.files[file].doc;
+  setProp(doc, path, 'children', entries.map((e) => e.node));
+  setProp(doc, path, 'ratio', ratio);
+  return fileChanged(file).then(() => {
+    // 比率を変えると位置が変わるので、選んでいた部分（並びの中の同じ番号）を選び直す
+    const R = findBox(lca.path);
+    if (!R) return;
+    const nk = curSlide().boxes.filter((b) => b.parent === R.path);
+    const picked = nk.filter((b, i) => entries[i] && entries[i].sel);
+    const leaves = curSlide().boxes.filter((b) => isLeaf(b) && picked.some((p) => within(b, p)));
+    setSel(leaves.map((b) => b.path));
+    applyView();
+    renderProps();
+  });
 }
 
 function commonAncestor(boxes) {
@@ -1791,6 +1817,8 @@ function renderGlobal() {
   const fold = document.createElement('details');
   fold.open = S.globalOpen;
   fold.ontoggle = () => {
+    // 描き直して画面から外れた欄の知らせ（遅れて届く）は無視する
+    if (!fold.isConnected) return;
     S.globalOpen = fold.open;
     fitLabels();
   };
