@@ -928,10 +928,13 @@ function setChildCount(box, listKey, n) {
 
 // 名前の列の幅を、画面に出ている名前のうち最も長いものに合わせる（入力欄の左端を全部揃える）
 function fitLabels() {
-  const aside = document.querySelector('aside');
-  aside.style.setProperty('--label-w', 'max-content');
-  const ws = [...aside.querySelectorAll('.row > label')].map((l) => l.getBoundingClientRect().width);
-  aside.style.setProperty('--label-w', `${Math.ceil(Math.max(40, ...ws))}px`);
+  // 項目名の列の幅は、「スライド全体」と「選択中のボックス」の欄で別々に、いちばん長い項目名に合わせる
+  for (const el of [$('#global'), $('#node')]) {
+    if (!el) continue;
+    el.style.setProperty('--label-w', 'max-content');
+    const ws = [...el.querySelectorAll('.row > label')].map((l) => l.getBoundingClientRect().width);
+    el.style.setProperty('--label-w', `${Math.ceil(Math.max(40, ...ws))}px`);
+  }
 }
 
 function renderProps() {
@@ -993,7 +996,20 @@ function renderProps() {
 }
 
 // 内側の余白。上・右・下・左の 4 つを 1 行で
-function paddingRow(box, node) {
+// 余白の 4 つの値 a（上・右・下・左）を、ボックス box の padding に書く値にする。
+// 決まった余白と同じなら書かない。テキストのボックスで 0 にしたときは、0 と書いて残す
+function padValue(box, a) {
+  const def = defaultPadding(box.kind);
+  const u = S.layout.unit;
+  const defV = def ? def.map((x) => Math.round(toUnit(x, u) * 1000) / 1000) : null;
+  const out = a.every((y) => y === a[0]) ? a[0] : a;
+  if (defV ? a.every((y, k) => y === defV[k]) : out === 0) return undefined;
+  return out;
+}
+
+// 余白の欄。targets（省略すると box だけ）の 1 つずつに、同じ余白を書く。値は box のものを出す
+function paddingRow(box, node, targets) {
+  const list = targets || [box];
   // テキストのボックスで余白を書いていないときは、決まった余白（上下左右に 0.5 cm）を出す
   const def = defaultPadding(box.kind);
   const u = S.layout.unit;
@@ -1002,6 +1018,19 @@ function paddingRow(box, node) {
   let v;
   if (Array.isArray(p)) v = p.length === 2 ? [p[0], p[1], p[0], p[1]] : [p[0], p[1], p[2], p[3]];
   else v = [p ?? 0, p ?? 0, p ?? 0, p ?? 0];
+  const writeAll = (key, valueOf) => {
+    const files = new Set();
+    try {
+      for (const t of list) {
+        if (!t.src) continue;
+        setProp(S.files[t.src.file].doc, t.src.path, key, valueOf(t));
+        files.add(t.src.file);
+      }
+    } catch (e) {
+      return status(`書き換えられません: ${e.message}`, true);
+    }
+    return Promise.all([...files].map((f) => fileChanged(f)));
+  };
   const wrap = h('span', 'in pad4');
   [['↑', '上'], ['→', '右'], ['↓', '下'], ['←', '左']].forEach(([icon, title], k) => {
     const ic = h('span', 'pad-ic', icon);
@@ -1009,15 +1038,12 @@ function paddingRow(box, node) {
     const inp = numEl(v[k] ?? 0, '0', (x) => {
       v[k] = x === '' ? 0 : +x;
       const a = v.map((y) => +y || 0);
-      let out = a.every((y) => y === a[0]) ? a[0] : a;
-      // 決まった余白と同じなら書かない。テキストのボックスで 0 にしたときは、0 と書いて残す
-      if (defV ? a.every((y, k) => y === defV[k]) : out === 0) out = undefined;
-      edit(box, 'padding', out);
+      writeAll('padding', (t) => padValue(t, a));
     });
     wrap.append(ic, inp);
   });
   const r = row('余白', wrap);
-  const inset = checkEl('背景ごと余白を設ける', !!node.background_inset, (x) => edit(box, 'background_inset', x || undefined));
+  const inset = checkEl('背景ごと余白を設ける', !!node.background_inset, (x) => writeAll('background_inset', () => x || undefined));
   const r2 = row('', inset);
   const both = h('div');
   both.append(r, r2);
@@ -1059,10 +1085,19 @@ function renderMulti(el) {
     el.append(fs);
   }
 
-  const fsBg = fieldset(all ? '余白・背景（選んだ範囲全体）' : '背景（選んだ範囲全体）');
+  // 余白は、選んだボックスの 1 つずつに同じ値を設定する（値は、いちばん上か左のボックスのものを出す）
+  const slideBoxes = curSlide().boxes;
+  const leaves = boxes.filter((b) => b.src).sort((a, b) => slideBoxes.indexOf(a) - slideBoxes.indexOf(b));
+  if (leaves.length) {
+    const fsPad = fieldset('余白（選んだボックスの 1 つずつ）');
+    fsPad.append(paddingRow(leaves[0], leaves[0].node || {}, leaves));
+    el.append(fsPad);
+  }
+  const outerPad = all && lca.node?.padding != null && JSON.stringify(lca.node.padding) !== '0';
+  const fsBg = fieldset(outerPad ? '外側の枠の余白・背景（選んだ範囲全体）' : '背景（選んだ範囲全体）');
   if (all) {
-    // 選んだ範囲が外側の枠 1 つ分にちょうど重なるときは、その枠の余白も出す（クリックでは選べない枠のため）
-    fsBg.append(paddingRow(lca, lca.node || {}));
+    // 外側の枠に余白が残っているときだけ、その余白も出す（クリックでは選べない枠のため）
+    if (outerPad) fsBg.append(paddingRow(lca, lca.node || {}));
     fsBg.append(...bgRows(lca.node.background, (v) => edit(lca, 'background', v)));
   } else if (lca.kind === 'split') {
     fsBg.append(...bgRows(undefined, (v) => v && groupWithBackground(lca, kids, covered[0][1], covered[covered.length - 1][1], v)));

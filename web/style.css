@@ -180,3 +180,8 @@ legend { color: var(--muted); padding: 0 4px; }
 /* 切り替えの欄の文が長いときは折り返す */
 .row > label.chk, label.chk { white-space: normal; align-items: flex-start; }
 .chk input { margin-top: 3px; flex: none; }
+
+/* 余白の 4 つの欄は、欄の幅に収まるように縮める */
+.row { grid-template-columns: var(--label-w, 7.5em) minmax(0, 1fr); }
+.row .pad4 { display: flex; align-items: center; min-width: 0; }
+.row .pad4 input[type=number] { flex: 1 1 0; min-width: 0; width: auto; }
