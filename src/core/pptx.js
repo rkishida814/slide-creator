@@ -101,6 +101,7 @@ function textRuns(text, f, paraSpace, glow) {
       if (glow) options.glow = glow;
       if (g.b || f.bold) options.bold = true;
       if (g.i || f.italic) options.italic = true;
+      if (g.color) options.color = g.color;
       if (g.sup) options.superscript = true;
       else if (g.sub) options.subscript = true;
       if (soft) options.softBreakBefore = true;

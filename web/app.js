@@ -1987,12 +1987,7 @@ function resizeAlong(c, dir, v, extra = []) {
       else change(i, delta);
       first = false;
       writes.push([q, ratio]);
-      if (i + 1 < sibs.length) {
-        if (L(sibs[i + 1]) - delta < -1e-6) {
-          status(dir === 'rows' ? '下のボックスに空きが足りないので、この高さにはできません。' : '右のボックスに空きが足りないので、この幅にはできません。', true);
-          return true;
-        }
-        change(i + 1, -delta);
+      const commit = () => {
         const files = new Set();
         for (const [qq, r] of [...extra, ...writes]) {
           setProp(S.files[qq.src.file].doc, qq.src.path, 'ratio', r);
@@ -2000,6 +1995,27 @@ function resizeAlong(c, dir, v, extra = []) {
         }
         for (const f of files) fileChanged(f);
         return true;
+      };
+      // 縮めるとき：空いた分は、すぐ下（右）のボックスが受け取る
+      if (delta < 0 && i + 1 < sibs.length) {
+        change(i + 1, -delta);
+        return commit();
+      }
+      // 伸ばすとき：下（右）のボックスは押し下げ、その分は、下のほうの空きのボックスから取る。
+      // この並びの空きで足りなければ、この並びごと伸ばし、外側の並びの空きから取る
+      if (delta > 0) {
+        const empties = sibs.map((b, j) => [b, j]).filter(([b, j]) => j > i && b.kind === 'empty');
+        const room = empties.reduce((a, [b]) => a + L(b), 0);
+        if (room >= delta - 1e-6) {
+          let need = delta;
+          for (let t = empties.length - 1; t >= 0 && need > 1e-6; t--) {
+            const [b, j] = empties[t];
+            const take = Math.min(L(b), need);
+            change(j, -take);
+            need -= take;
+          }
+          return commit();
+        }
       }
     } else if (!(q.kind === 'split' && q.src)) {
       return null;
@@ -2008,7 +2024,7 @@ function resizeAlong(c, dir, v, extra = []) {
     x = q;
     q = q.parent ? findBox(q.parent) : null;
   }
-  status(dir === 'rows' ? '下に空きが無いので、この高さにはできません。' : '右に空きが無いので、この幅にはできません。', true);
+  status(dir === 'rows' ? '下に空きのボックスが足りないので、この高さにはできません。' : '右に空きのボックスが足りないので、この幅にはできません。', true);
   return true;
 }
 
@@ -2263,6 +2279,31 @@ function richEditor(value, onCommit) {
     };
     bar.append(b);
   }
+  // 選んだ部分の色：左の色の見本で色を選び、「色」で付ける。「色を外す」で文字全体の色に戻す
+  const pick = document.createElement('input');
+  pick.type = 'color';
+  pick.className = 'rich-color';
+  pick.value = S.lastTextColor || '#c00000';
+  pick.title = '選んだ部分に付ける色';
+  pick.onchange = () => (S.lastTextColor = pick.value);
+  const colorBtn = (label, title, value) => {
+    const b = h('button', 'rich-btn rich-txt');
+    b.type = 'button';
+    b.textContent = label;
+    b.title = title;
+    b.onmousedown = (e) => {
+      e.preventDefault(); // テキストの欄の選択を保つ
+      document.execCommand('styleWithCSS', false, true);
+      document.execCommand('foreColor', false, value());
+      document.execCommand('styleWithCSS', false, false);
+      commit();
+    };
+    return b;
+  };
+  // 色の 3 つは 1 つのまとまりにして、幅が足りなければ一緒に次の行へ回す
+  const grp = h('span', 'rich-group');
+  grp.append(pick, colorBtn('色', '選んだ部分を、左の色にする', () => pick.value), colorBtn('色を外す', '選んだ部分の色を外す（文字全体の色に戻す）', () => NO_COLOR));
+  bar.append(grp);
   ed.onfocus = () => document.execCommand('defaultParagraphSeparator', false, 'div');
   // Shift+Enter：カーソルのある段落の中に ↵ と改行を差し込み、カーソルをその直後に置く
   const insertSoftBreak = () => {
@@ -2322,6 +2363,17 @@ function afterMark(br) {
   return !!p?.classList?.contains('sb');
 }
 
+// 「色を外す」で一時的に付ける色（書き出すときに色の印ごと外す）
+const NO_COLOR = '#010203';
+// "rgb(r, g, b)" や "#rgb" を "RRGGBB" にする
+function toHex6(c) {
+  const m = String(c).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (m) return [m[1], m[2], m[3]].map((x) => (+x).toString(16).padStart(2, '0')).join('').toUpperCase();
+  const s = String(c).replace(/^#/, '');
+  if (/^[0-9a-f]{3}$/i.test(s)) return s.split('').map((x) => x + x).join('').toUpperCase();
+  return /^[0-9a-f]{6}$/i.test(s) ? s.toUpperCase() : null;
+}
+
 function serializeRich(root) {
   const TAGS = { B: 'b', STRONG: 'b', I: 'i', EM: 'i', SUP: 'sup', SUB: 'sub' };
   const inline = (n) => {
@@ -2336,9 +2388,15 @@ function serializeRich(root) {
           continue;
         }
         const t = TAGS[c.nodeName];
+        // 色：<span style="color:…">（入力欄で付けたもの）か <font color="…">
+        const raw = c.nodeName === 'FONT' ? c.getAttribute('color') : c.style?.color;
+        const col = raw ? toHex6(raw) : null;
+        const colTag = col && col !== NO_COLOR.slice(1).toUpperCase() ? col : null;
+        if (colTag) out += `<color #${colTag}>`;
         if (t) out += `<${t}>`;
         out += inline(c);
         if (t) out += `</${t}>`;
+        if (colTag) out += '</color>';
       }
     }
     return out;
@@ -2355,7 +2413,11 @@ function serializeRich(root) {
     }
   }
   if (pending !== null) paras.push(pending);
-  return paras.join('\n').replace(/<(b|i|sup|sub)><\/\1>/g, '');
+  return paras.join('\n')
+    .replace(/<(b|i|sup|sub)><\/\1>/g, '')
+    .replace(/<color #[0-9A-F]{6}><\/color>/g, '')
+    // 隣り合う同じ色はまとめる
+    .replace(/<color (#[0-9A-F]{6})>((?:(?!<\/?color)[\s\S])*)<\/color><color \1>/g, '<color $1>$2');
 }
 
 // 背景の欄。値は "#RRGGBB"（色）か { image, mode: tile | cover, tile, color }
