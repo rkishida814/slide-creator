@@ -731,6 +731,7 @@ function renderMulti(el) {
         const pv = parseLen(x);
         if (pv === undefined) return;
         ratio[i] = pv;
+        keepOneFlexible(ratio, i);
         edit(lca, 'ratio', ratio);
       });
       t.className = 'ratio-in';
@@ -1035,6 +1036,14 @@ function renderGlobal() {
 }
 
 // そのボックスの幅（左右に分ける分割）・高さ（上下に分ける分割）を決めている分割と、その中の何番目か
+// 同じ並びの部分がすべて長さで固定になると、空いた長さを受け取る部分が無くなり、隙間が残る。
+// そうなるときは、書き換えた部分の隣（最後の部分なら 1 つ前）を比率に戻し、残りの長さを受け取らせる
+function keepOneFlexible(ratio, i) {
+  if (!ratio.every((x) => typeof x === 'string')) return;
+  const j = i + 1 < ratio.length ? i + 1 : i - 1;
+  if (j >= 0) ratio[j] = 1;
+}
+
 function sizeCtrl(box, dir) {
   for (let b = box; b && b.parent; b = findBox(b.parent)) {
     const p = findBox(b.parent);
@@ -1072,6 +1081,7 @@ function sizeFields(box) {
     const ratio = Array.isArray(c.p.node.ratio) && c.p.node.ratio.length === n ? [...c.p.node.ratio] : Array(n).fill(1);
     const write = (v) => {
       ratio[c.i] = v;
+      keepOneFlexible(ratio, c.i);
       edit(c.p, 'ratio', ratio);
     };
     if (mode === 'len') return numEl(r3(lenOf(c.child)), '', (v) => +v > 0 && write(`${+v}${u}`));
