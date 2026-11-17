@@ -307,6 +307,25 @@ function fitTextBelow(path, doc) {
 }
 
 // 画像のボックスの高さを、表示している画像の高さ（余白を含む）まで縮め、下に余った部分を別のボックス（空き）にする
+// 画像の上下に隙間があるか（ボックスの余白の分は除く）
+function imageHasGap(box) {
+  const el = curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
+  if (!el) return false;
+  const pad = parseBox((box.node || {}).padding, S.layout.unit);
+  return box.rect.h - pad.t - pad.b - el.rect.h > 0.01;
+}
+
+// 複数の画像のボックスを、1 つずつ詰める（詰めるたびに描き直されるので、順に待つ）
+async function fitImagesBelow(paths) {
+  for (const p of paths) {
+    const b = findBox(p);
+    if (!b || b.kind !== 'image' || !imageHasGap(b)) continue;
+    const r = fitImageBelow(b);
+    if (r && r.then) await r;
+  }
+  status('画像の上下の余白を詰めました');
+}
+
 function fitImageBelow(box) {
   const el = curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
   if (!el) return;
@@ -1359,6 +1378,15 @@ function renderMulti(el) {
     fsT.append(row('', checkEl('テキストの下に生じた余白を別のボックスにする', on, (x) => setSplitBelowMany(texts.map((b) => b.path), x))));
     el.append(fsT);
   }
+  // 画像のボックスを選んでいて、上下に隙間のあるものがあれば、まとめて詰めるボタンを出す
+  const gapImgs = boxes.filter((b) => b.kind === 'image' && b.src && imageHasGap(b));
+  if (gapImgs.length) {
+    const fsI = fieldset('画像（選んだボックスの 1 つずつ）');
+    const acts = h('div', 'actions');
+    acts.append(btn('画像の上下の余白を詰める', () => fitImagesBelow(gapImgs.map((b) => b.path))));
+    fsI.append(acts);
+    el.append(fsI);
+  }
   // 余白は、選んだボックスの 1 つずつに同じ値を設定する（値は、いちばん上か左のボックスのものを出す）
   const slideBoxes = curSlide().boxes;
   const leaves = boxes.filter((b) => b.src).sort((a, b) => slideBoxes.indexOf(a) - slideBoxes.indexOf(b));
@@ -1913,9 +1941,7 @@ function imageFields(box, node, inh) {
   const acts = h('div', 'actions');
   acts.append(btn('画像を見ながらトリミング…', () => cropDialog(box, node, el)));
   // 画像の上下に隙間があるときだけ、詰めるボタンを出す
-  // （ボックスの余白の分は除く）
-  const padB = parseBox(node.padding, S.layout.unit);
-  if (el && box.rect.h - padB.t - padB.b - el.rect.h > 0.01) acts.append(btn('画像の上下の余白を詰める', () => fitImageBelow(box)));
+  if (el && imageHasGap(box)) acts.append(btn('画像の上下の余白を詰める', () => fitImageBelow(box)));
   if (node.crop) acts.append(btn('トリミングを外す', () => edit(box, 'crop', undefined)));
   fs.append(acts);
   if (el) fs.append(h('div', 'note', `元画像 ${el.natural.w} × ${el.natural.h} px、表示する大きさ ${fmt(el.rect.w)} × ${fmt(el.rect.h)} ${S.layout.unit}、解像度 ${el.dpi} dpi`));
