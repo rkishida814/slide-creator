@@ -2415,19 +2415,13 @@ function textFields(box, node, inh) {
   };
   const f = node.font || {};
   const fi = inh.font || {};
-  // 「色」の欄：文字を選んでいれば、その部分の色を出して、その部分だけを変える（大きさの欄と同じ）。
-  // 選んでいなければ、ボックス全体の文字の色を出して変える
-  const boxColor = f.color ?? fi.color;
-  let rich = null;
-  const colorIn = colorEl(boxColor, (v) => {
-    if (rich?._hasSel()) return rich._applyColor(v || NO_COLOR);
-    return edit(box, ['font', 'color'], v || undefined);
-  });
-  rich = richEditor(wrapWhole(String(node.text ?? ''), f), {
+  // 文字の色は、テキストの欄の A で変える（文字を選んでいればその部分、選んでいなければボックス全体）
+  const rich = richEditor(wrapWhole(String(node.text ?? ''), f), {
     base: f.size ?? fi.size ?? DEFAULT_SIZE,
     path: box.path,
     onBaseSize: (n) => edit(box, ['font', 'size'], n),
-    onSel: ({ selected, color }) => colorIn._show(selected ? color ?? boxColor : boxColor, selected),
+    boxColor: f.color ?? fi.color,
+    onBoxColor: (v) => edit(box, ['font', 'color'], v || undefined),
   }, (v) => {
     S.keepPanel = box.path;
     const off = box.src.mode === 'direct' ? undefined : false;
@@ -2448,7 +2442,6 @@ function textFields(box, node, inh) {
     })),
     row('フォント（英語）', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
     row('フォント（日本語）', selectEl(JA_FONT_OPTS, f.family_ja ?? fi.family_ja ?? DEFAULT_FONT_JA, (v) => edit(box, ['font', 'family_ja'], v))),
-    row('色', colorIn),
     ...textBgRows(box, node, edit),
     row('見出しアイコン', h2(
       selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a.split('/').pop()])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined)),
@@ -2682,7 +2675,12 @@ function richEditor(value, opts, onCommit) {
     return null;
   };
   // 選んだ範囲が変わったことを、設定欄の「色」に知らせる（選んだ部分の色を出すため）
-  const tellSel = () => opts.onSel?.({ selected: hasSel(), color: hasSel() ? colorAt(saved) : null });
+  // A の帯に、いまの色（選んだ部分の色。選んでいなければボックス全体の文字の色）を出す
+  const shownColor = () => (hasSel() && colorAt(saved)) || normColor(opts.boxColor) || '#000000';
+  const tellSel = () => {
+    const b = bar.querySelector('.rich-colorA .bar');
+    if (b) b.style.background = shownColor();
+  };
   document.addEventListener('selectionchange', onSel);
   // 設定欄を作り直したとき（renderProps）に、選んでいた範囲を新しい欄へ写すための口
   wrap._getSaved = () => saved;
@@ -2693,13 +2691,6 @@ function richEditor(value, opts, onCommit) {
   };
   // 文字を選んでいるか（カーソルだけなら false）
   const hasSel = () => !!(saved && !saved.collapsed && ed.contains(saved.commonAncestorContainer));
-  wrap._hasSel = hasSel;
-  // 選んだ範囲に色を付ける（設定欄の「色」から。NO_COLOR なら一部の色を外す）
-  wrap._applyColor = (v) => {
-    restoreSel();
-    applyColor(v);
-    saveSel();
-  };
   const grpSize = h('span', 'rich-group');
   grpSize.append(sizeIn, h('span', 'rich-unit', 'pt'));
 
@@ -2752,17 +2743,18 @@ function richEditor(value, opts, onCommit) {
     iconBtn('rich-sub', '<span>x<sub>2</sub></span>', '下付き', exec('subscript')),
   );
 
-  // 文字の色：「A」で、下の帯の色を付ける。▾ で色を選ぶ・色を外す
-  const curColor = () => S.lastTextColor || '#c00000';
-  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${curColor()}"></span>`, '選んだ部分に色を付ける', () => applyColor(curColor()));
+  // 文字の色：A の帯は、いまの色（選んだ部分の色。選んでいなければボックス全体の文字の色）。
+  // A か ▾ で色のメニューを開き、選んだ色を、文字を選んでいればその部分、選んでいなければボックス全体に付ける
+  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${normColor(opts.boxColor) || '#000000'}"></span>`, '文字の色', () => colorDrop.querySelector('.rich-arrow').onmousedown(new MouseEvent('mousedown')));
   const grpColor = h('span', 'rich-group');
-  grpColor.append(colorA, dropMenu('文字の色', (menu, close) => {
+  const colorDrop = dropMenu('文字の色', (menu, close) => {
+    const sel = hasSel();
     const use = (c) => {
-      S.lastTextColor = c;
-      colorA.querySelector('.bar').style.background = c;
+      close();
+      if (!sel) return opts.onBoxColor?.(c);
       restoreSel();
       applyColor(c);
-      close();
+      tellSel();
     };
     // このスライドで使っている色
     const used = usedColors();
@@ -2780,17 +2772,19 @@ function richEditor(value, opts, onCommit) {
     pick.type = 'color';
     pick.className = 'rich-color';
     pick.setAttribute('list', refreshColorList());
-    // 選んだ部分に色が付いていれば、その色を出す
-    pick.value = (hasSel() && colorAt(saved)) || curColor();
+    pick.value = shownColor();
     pick.onchange = () => use(pick.value);
     const row = h('div', 'rich-menu-row');
     row.append(h('span', null, 'ほかの色'), pick);
     menu.append(row, iconBtn('rich-item', '色を外す', '', () => {
+      close();
+      if (!sel) return opts.onBoxColor?.(undefined);
       restoreSel();
       applyColor(NO_COLOR);
-      close();
+      tellSel();
     }));
-  }));
+  });
+  grpColor.append(colorA, colorDrop);
 
   // 箇条書き：カーソルのある段落（選んだ段落）の行頭に「•」を付ける。もう一度押すと外す
   const bulletIcon = '<svg viewBox="0 0 20 16" width="20" height="16"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.6"/><circle cx="2.5" cy="8" r="1.6"/><circle cx="2.5" cy="13" r="1.6"/></g><g stroke="currentColor" stroke-width="1.6"><path d="M7 3h12M7 8h12M7 13h12"/></g></svg>';
@@ -2812,7 +2806,7 @@ function richEditor(value, opts, onCommit) {
   // メニューの外を押したら閉じる（欄が画面から消えたら、この見張りも外す）
   const outside = (e) => {
     if (!wrap.isConnected) return document.removeEventListener('mousedown', outside);
-    if (!e.target.closest?.('.rich-drop')) menus.forEach((m) => (m.hidden = true));
+    if (!e.target.closest?.('.rich-drop, .rich-colorA')) menus.forEach((m) => (m.hidden = true));
   };
   document.addEventListener('mousedown', outside);
 
@@ -3461,14 +3455,6 @@ function colorEl(value, onCommit) {
   c.oninput = () => (t.value = c.value);
   c.onchange = () => onCommit(c.value);
   wrap.append(c, t);
-  // 出す色を変える（テキストの欄で選んだ部分の色など）。part なら「選んだ部分」と分かるように印を付ける
-  wrap._show = (v, part = false) => {
-    if (document.activeElement === t) return;
-    c.value = normColor(v) || '#000000';
-    t.value = v ?? '';
-    wrap.classList.toggle('part', !!part);
-    c.title = part ? '選んだ部分の色' : '';
-  };
   return wrap;
 }
 
