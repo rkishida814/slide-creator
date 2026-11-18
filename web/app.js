@@ -3886,21 +3886,31 @@ async function measureForPPTX() {
   }
 }
 
-function exportPDF() {
+// PDF は、ポスターだけを描いた新しいウィンドウを印刷して作る。
+// 画面の中の見えない枠（iframe）を印刷すると、Chrome が枠の用紙の指定（ポスターの大きさ・余白 0）を使わず、
+// 普通の用紙と余白で印刷し、余白に日付・題名・URL・ページ番号のヘッダーとフッターを入れていた。
+// 新しいウィンドウなら、用紙の指定がそのまま効く（余白が 0 なので、ヘッダーとフッターは入らない）
+async function exportPDF() {
   if (!S.layout) return;
-  const html = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true });
-  const f = document.createElement('iframe');
-  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0';
-  document.body.append(f);
-  f.onload = async () => {
-    // フォントを読み込み終えてから印刷する（待たないと、日本語が別のフォントで PDF に入る）
-    await loadUsedFonts(f.contentDocument);
-    await Promise.all([...f.contentDocument.images].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
-    f.contentWindow.print();
-    setTimeout(() => f.remove(), 1000);
-  };
-  f.srcdoc = html;
+  const w = window.open('', '_blank');
+  if (!w) return status('新しいウィンドウを開けません。このページのポップアップを許可してから、もう一度押してください。', true);
+  const name = String(S.source?.name || 'slide').replace(/[<>&"]/g, '');
+  const html = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true }).replace('<head>', `<head><title>${name}</title>`);
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
   status('印刷画面で「PDFに保存」を選んでください');
+  try {
+    if (w.document.readyState !== 'complete') await new Promise((r) => w.addEventListener('load', r, { once: true }));
+    // フォントと画像を読み込み終えてから印刷する（待たないと、日本語が別のフォントで PDF に入る）
+    await loadUsedFonts(w.document);
+    await Promise.all([...w.document.images].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
+    w.addEventListener('afterprint', () => w.close(), { once: true });
+    w.focus();
+    w.print();
+  } catch (e) {
+    status(`PDF を作れません: ${e.message}`, true);
+  }
 }
 
 // ---------------------------------------------------------------- 前回のフォルダ
