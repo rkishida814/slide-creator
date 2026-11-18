@@ -31,6 +31,7 @@ const S = {
   overflow: [],
   view: null,
   bgEdit: null, // 背景を編集しているボックスの path（このあいだ、プレビューで選ぶのは背景の枠）
+  block: false, // 選択対象が「既存レイアウト」のとき true（取り込んだレイアウトを塊ごと選ぶ）
 };
 
 // ---------------------------------------------------------------- 読み込み
@@ -192,8 +193,8 @@ function renderPreview() {
   }
   const html = renderHTML(S.layout, {
     slides: [slide.id],
-    outline: S.outline || !!S.bgEdit,
-    outlineBoxes: S.bgEdit ? curSlide().boxes : undefined,
+    outline: S.outline || !!S.bgEdit || S.block,
+    outlineBoxes: S.bgEdit ? curSlide().boxes : S.block ? blockRoots() : undefined,
     srcURL: (src) => S.imageURLs.get(src) || '',
   }).replace('</style>', `${FRAME_CSS}</style>`);
   frame.onload = setupFrame;
@@ -246,22 +247,22 @@ function setupFrame() {
   let dragged = false;
   doc.addEventListener('mousedown', (e) => {
     if (e.button !== 0) return;
-    const b = leafAt(e);
+    const b = pickAt(e);
     if (!b) return;
     e.preventDefault();
     drag = { box: b, x: e.clientX, y: e.clientY, moving: false, swap: e.metaKey || e.ctrlKey };
     // 複数選んだ行（横いっぱい）の中から ⌘ドラッグを始めたら、行ごと入れ替える
-    if (drag.swap && (S.sel || []).length > 1 && S.sel.includes(b.path)) drag.row = rowSwapPlan();
+    if (!S.block && drag.swap && (S.sel || []).length > 1 && S.sel.includes(b.path)) drag.row = rowSwapPlan();
   });
   doc.addEventListener('mousemove', (e) => {
-    if (!drag) return hover(leafAt(e));
+    if (!drag) return hover(pickAt(e));
     if (!drag.moving && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 6) {
       drag.moving = true;
       hover(null);
       if (drag.swap) doc.body.style.cursor = 'grabbing';
     }
     if (!drag.moving) return;
-    const t = leafAt(e);
+    const t = pickAt(e);
     if (drag.swap && drag.row) {
       showDrop(rowDropTarget(drag.row, t));
     } else if (drag.swap) {
@@ -285,7 +286,7 @@ function setupFrame() {
       return;
     }
     if (d.swap) {
-      const t = leafAt(e);
+      const t = pickAt(e);
       if (t && t.path !== d.box.path) {
         if (canSwap(d.box, t)) swapBoxes(d.box, t);
         else status('このボックスとは入れ替えられません。テンプレートの一部のボックスは入れ替えられません。', true);
@@ -294,7 +295,7 @@ function setupFrame() {
     }
     const r = S.dragSel;
     S.dragSel = null;
-    if (r) setSel(r.leaves.map((l) => l.path));
+    if (r) setSel(S.block ? blocksLeaves(r.leaves) : r.leaves.map((l) => l.path));
     applyView();
     renderProps();
   });
@@ -304,7 +305,12 @@ function setupFrame() {
       dragged = false;
       return;
     }
-    const b = leafAt(e);
+    const b = pickAt(e);
+    if (S.block) {
+      setSel(b ? blockLeafPaths(b) : []);
+      applyView();
+      return renderProps();
+    }
     select(b ? b.path : null);
   });
   doc.addEventListener('keydown', onKey);
@@ -486,7 +492,7 @@ function frameEl(cls) {
 function hover(box) {
   const el = frameEl('hov');
   if (!el) return;
-  const show = box && !(S.sel || []).includes(box.path);
+  const show = box && !(S.sel || []).includes(box.path) && !(S.block && blockLeafPaths(box).every((p) => S.sel.includes(p)));
   placeIn(el, show ? box.rect : null);
   const s = S.view?.s || 1;
   el.style.outline = `${1.5 / s}px solid rgba(37, 99, 235, .7)`;
@@ -613,6 +619,7 @@ function applyView() {
   const one = S.selected ? findBox(S.selected) : null;
   $('#btn-split').disabled = !(one && one.src && isLeaf(one));
   $('#btn-zoom-fit').disabled = !(S.sel || []).length;
+  $('#layer').value = S.bgEdit ? 'bg' : S.block ? 'block' : 'main';
   $('#btn-dup').disabled = !dupPlan();
   $('#btn-merge').disabled = !((S.sel || []).length > 1 && selectionUnit());
   $('#btn-delete').disabled = !((S.sel || []).length > 1 ? selectionUnit() : one && canRemove(one));
@@ -1312,6 +1319,7 @@ function renderProps() {
   el.innerHTML = '';
   if (!S.layout) return;
   if (S.bgEdit) return renderBgProps(el);
+  if (S.block) return renderBlockProps(el);
   if ((S.sel || []).length > 1) return renderMulti(el);
   const box = S.selected ? findBox(S.selected) : null;
   el.append(h('h2', null, '選択中のボックス'));
@@ -2213,6 +2221,8 @@ async function doImport(box, file, page) {
     const usedIds = curSlide().boxes.filter((b) => b.id && b.path !== box.path).map((b) => b.id);
     const { node: imported, scale, dropped } = importLayout(sub, { slide: page, dir: dirOf(file), unit: S.layout.unit, rect, usedIds });
     const target = Object.fromEntries(Object.entries(plain(node) || {}).filter(([k]) => typeof k === 'string'));
+    // 取り込み元の印を残す（選択対象「既存レイアウト」で、塊ごと選ぶため）
+    imported.from_layout = file;
     replaceNode(S.files[box.src.file].doc, box.src.path, placeImported(target, imported));
     S.importFor = null;
     await fileChanged(box.src.file);
@@ -2574,6 +2584,91 @@ function bgRows(cur, write) {
     })));
   }
   return rows;
+}
+
+// ---------------------------------------------------------------- 選択対象（主レイヤー・背景・既存レイアウト）
+// 既存レイアウト：「レイアウトを取り込む」で入れたボックスの組（from_layout の印がある）を、塊ごと選ぶ
+
+// b を含む、いちばん外側の取り込んだ塊（無ければ null）
+function blockOf(b) {
+  const s = realSlide();
+  let top = null;
+  for (let x = b; x; x = x.parent ? s.boxes.find((y) => y.path === x.parent) : null) if (x.node?.from_layout) top = x;
+  return top;
+}
+
+function blockRoots() {
+  return (realSlide()?.boxes || []).filter((b) => b.node?.from_layout && blockOf(b) === b);
+}
+
+function blockLeafPaths(block) {
+  return realSlide().boxes.filter((b) => isLeaf(b) && within(b, block)).map((b) => b.path);
+}
+
+function blocksLeaves(leaves) {
+  const out = new Set();
+  for (const l of leaves) {
+    const blk = blockOf(l);
+    if (blk) for (const p of blockLeafPaths(blk)) out.add(p);
+  }
+  return [...out];
+}
+
+// クリックした点で選ぶもの。既存レイアウトのときは、取り込んだ塊
+function pickAt(e) {
+  const b = leafAt(e);
+  return S.block && b ? blockOf(b) : b;
+}
+
+async function setLayer(v) {
+  if (v === 'bg') {
+    // 背景を編集するボックス：選んでいるボックス（既存レイアウトなら、その塊）。選んでいなければスライド全体の枠
+    const s = realSlide();
+    let host = null;
+    if ((S.sel || []).length) {
+      const bs = S.sel.map(findBox).filter(Boolean);
+      host = S.block ? blockOf(bs[0]) : bs.length === 1 ? bs[0] : commonAncestor(bs);
+    }
+    host = host || s?.boxes.find((b) => b.depth === 0);
+    if (!host?.src || host.src.mode !== 'direct') {
+      $('#layer').value = S.block ? 'block' : 'main';
+      return status('このボックスの背景は分けられません（テンプレートの一部のボックス）。主レイヤーで別のボックスを選んでから、背景を選んでください。', true);
+    }
+    S.block = false;
+    return enterBgEdit(host);
+  }
+  if (S.bgEdit) await exitBgEdit();
+  S.block = v === 'block';
+  setSel([]);
+  renderPreview();
+  renderProps();
+  if (S.block && !blockRoots().length) status('このスライドには、取り込み元の印が付いたレイアウトがありません。印は、これから「レイアウトを取り込む」で入れたものに付きます。');
+  else status('');
+}
+
+function renderBlockProps(el) {
+  const boxes = (S.sel || []).map(findBox).filter(Boolean);
+  const blk = boxes.length ? blockOf(boxes[0]) : null;
+  if (!blk) {
+    el.append(h('h2', null, '既存レイアウト'));
+    el.append(h('p', 'note', '取り込んだレイアウトをクリックすると、その塊ごと選びます。⌘ドラッグで、別の塊と入れ替えます。'));
+    return;
+  }
+  // 塊の中のボックスを全部選んだのと同じ欄を出し、取り込み元を書き添える
+  if (boxes.length > 1) renderMulti(el);
+  else {
+    S.block = false;
+    S.keepPanel = null;
+    try {
+      renderProps();
+    } finally {
+      S.block = true;
+    }
+  }
+  const meta = el.querySelector('p.meta');
+  const src = h('p', 'meta', `取り込み元：${blk.node.from_layout}`);
+  if (meta) meta.after(src);
+  else el.prepend(src);
 }
 
 // ---------------------------------------------------------------- 背景の編集
@@ -2997,13 +3092,7 @@ $('#zoom').oninput = (e) => {
   setZoom(+e.target.value / 100);
   applyView();
 };
-$('#btn-whole').onclick = () => {
-  setSel([]);
-  S.extraSpace = null;
-  setZoom(1);
-  applyView();
-  renderProps();
-};
+$('#layer').onchange = (e) => setLayer(e.target.value);
 $('#chk-outline').onchange = (e) => {
   S.outline = e.target.checked;
   renderPreview();

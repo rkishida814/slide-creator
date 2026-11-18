@@ -36,7 +36,11 @@
       <button id="btn-dup" disabled title="選んだ行を、すぐ下に同じ大きさで複製する（横いっぱいの行を選んだときだけ）">複製して追加</button>
       <button id="btn-delete" class="icon" disabled title="選択中のボックスを削除"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/></svg></button>
       <span class="zoom"><button id="btn-zoom-fit" class="icon" disabled title="選択中のボックスを左上に寄せ、画面いっぱいまで拡大"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg></button><input type="range" id="zoom" min="100" max="800" step="10" value="100"><span id="zoom-val">100%</span></span>
-      <button id="btn-whole" title="選択を外して全体を表示">全体表示</button>
+      <select id="layer" class="page-select" title="プレビューでクリックして選ぶもの">
+        <option value="main">主レイヤー</option>
+        <option value="bg">背景</option>
+        <option value="block">既存レイアウト</option>
+      </select>
     </div>
     <div class="frame-wrap">
       <iframe id="frame" title="プレビュー"></iframe>
