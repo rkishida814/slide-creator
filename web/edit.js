@@ -12,7 +12,26 @@ export function parse(text) {
 }
 
 export function stringify(doc) {
+  quoteRiskyFlowStrings(doc);
+  const text = doc.toString({ lineWidth: 0 });
+  if (!YAML.parseDocument(text).errors.length) return text;
+  // それでも読み直せない書き方になったら、{ } [ ] の中の改行を含む文字を、すべて引用符で囲んで書き直す
+  quoteRiskyFlowStrings(doc, true);
   return doc.toString({ lineWidth: 0 });
+}
+
+// yaml（2.9.1）は、{ } [ ] の中の文字で、行が「:」で終わり改行が続くもの（例："Objectives:\n本文"）を、
+// 引用符なしで書き出してしまい、読み直すと誤りになる（「text:」の中に別の対応表があるように読める）。
+// そうなる文字は、書き出す前に二重引用符で囲む。all なら、{ } [ ] の中の改行を含む文字をすべて囲む
+function quoteRiskyFlowStrings(doc, all = false) {
+  YAML.visit(doc, {
+    Scalar(_, node, path) {
+      if (typeof node.value !== 'string' || !node.value.includes('\n')) return;
+      if (node.type && node.type !== YAML.Scalar.PLAIN) return;
+      if (!path.some((p) => YAML.isCollection(p) && p.flow)) return;
+      if (all || /:[ \t]*$/m.test(node.value)) node.type = YAML.Scalar.QUOTE_DOUBLE;
+    },
+  });
 }
 
 // 値を YAML のノードにする。数値・文字の配列（ratio, crop, padding）は [a, b] の形で書く
