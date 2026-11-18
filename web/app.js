@@ -1955,6 +1955,11 @@ function renderGlobal() {
     row('縦横比', ratioIn),
     row('', lockIn),
     row('用紙', paperIn),
+    row('文字の大きさ', h2(numEl(getJS(doc, ['defaults', 'font', 'size']) ?? DEFAULT_SIZE, '', (v) => {
+      if (!(+v > 0)) return;
+      setProp(doc, ['defaults'], ['font', 'size'], +v);
+      fileChanged('layout.yaml');
+    }), 'pt')),
     row('フォント（英語）', selectEl(FONT_OPTS, getJS(doc, ['defaults', 'font', 'family']) ?? DEFAULT_FONT, (v) => {
       setProp(doc, ['defaults'], ['font', 'family'], v);
       fileChanged('layout.yaml');
@@ -2311,7 +2316,7 @@ function textFields(box, node, inh) {
   const f = node.font || {};
   const fi = inh.font || {};
   fs.append(
-    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), (v) => {
+    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), { base: f.size ?? fi.size ?? DEFAULT_SIZE }, (v) => {
       S.keepPanel = box.path;
       const off = box.src.mode === 'direct' ? undefined : false;
       const pairs = [['text', v]];
@@ -2399,19 +2404,20 @@ async function pickImageFile() {
 // Enter は段落の区切り（行末に ¶）、Shift+Enter は段落の中の改行（↵）。
 // layout.yaml には、段落の区切りを改行、段落の中の改行を <br> として書く
 const SOFT_BREAK = '<span class="sb" contenteditable="false">↵</span><br>';
-function editorHTML(value) {
+function editorHTML(value, base = DEFAULT_SIZE) {
   return paragraphs(value)
-    .map((p) => `<div${{ normal: ' class="li"', hidden: ' class="li lih"' }[bulletType(p)] || ''}>${richToHTML(p, SOFT_BREAK, (src) => S.imageURLs.get(src) || '') || '<br>'}</div>`)
+    .map((p) => `<div${{ normal: ' class="li"', hidden: ' class="li lih"' }[bulletType(p)] || ''}>${richToHTML(p, SOFT_BREAK, (src) => S.imageURLs.get(src) || '', (n) => `${+(n / base).toFixed(4)}em`) || '<br>'}</div>`)
     .join('');
 }
 
-function richEditor(value, onCommit) {
+function richEditor(value, opts, onCommit) {
+  const base = opts.base || DEFAULT_SIZE; // ボックスの文字の大きさ（pt）。一部の大きさは、これに対する比で編集欄に出す
   const wrap = h('div', 'rich-wrap');
   const bar = h('div', 'rich-bar');
   const ed = document.createElement('div');
   ed.className = 'rich';
   ed.contentEditable = 'true';
-  ed.innerHTML = editorHTML(value);
+  ed.innerHTML = editorHTML(value, base);
   let last = value;
   let timer = null;
   const commit = () => {
@@ -2475,6 +2481,39 @@ function richEditor(value, onCommit) {
   const sep = () => h('span', 'rich-sep');
 
   // 太字・斜体・下線・上付き・下付き
+  // 文字の大きさの欄（PowerPoint のフォントサイズの欄）。選んだ部分の大きさを出し、変えると選んだ部分だけを変える
+  const sizeIn = document.createElement('input');
+  sizeIn.type = 'number';
+  sizeIn.min = '1';
+  sizeIn.step = '1';
+  sizeIn.className = 'rich-size';
+  sizeIn.title = '選んだ部分の文字の大きさ（pt）';
+  sizeIn.value = String(base);
+  sizeIn.onmousedown = saveSel;
+  sizeIn.onfocus = saveSel;
+  sizeIn.onchange = () => {
+    const n = +sizeIn.value;
+    if (!(n > 0)) return;
+    restoreSel();
+    applySize(n);
+    saveSel();
+  };
+  const sizeOf = () => {
+    const sel = getSelection();
+    if (!sel.rangeCount) return;
+    const n = sel.getRangeAt(0).startContainer;
+    if (!ed.contains(n)) return;
+    const sp = (n.nodeType === 1 ? n : n.parentElement)?.closest('span.fs');
+    if (document.activeElement !== sizeIn) sizeIn.value = String(sp && ed.contains(sp) ? +sp.dataset.size : base);
+  };
+  const onSel = () => {
+    if (!wrap.isConnected) return document.removeEventListener('selectionchange', onSel);
+    sizeOf();
+  };
+  document.addEventListener('selectionchange', onSel);
+  const grpSize = h('span', 'rich-group');
+  grpSize.append(sizeIn, h('span', 'rich-unit', 'pt'));
+
   const grpFont = h('span', 'rich-group');
   grpFont.append(
     iconBtn('rich-bold', 'B', '太字', exec('bold')),
@@ -2542,7 +2581,7 @@ function richEditor(value, onCommit) {
     };
     const row = h('div', 'rich-menu-row');
     row.append(h('span', null, 'ほかの色'), pick);
-    menu.append(row, iconBtn('rich-item', '色を外す（文字全体の色に戻す）', '', () => {
+    menu.append(row, iconBtn('rich-item', '色を外す', '', () => {
       restoreSel();
       applyColor(NO_COLOR);
       close();
@@ -2561,11 +2600,11 @@ function richEditor(value, onCommit) {
         close();
       }));
       item('• 通常', 'normal');
-      item('不可視（字下げだけ。行頭の • を描かない）', 'hidden');
+      item('不可視', 'hidden');
     }),
   );
 
-  bar.append(grpFont, sep(), grpColor, sep(), grpPara);
+  bar.append(grpFont, sep(), grpColor, sep(), grpSize, grpPara);
   // メニューの外を押したら閉じる（欄が画面から消えたら、この見張りも外す）
   const outside = (e) => {
     if (!wrap.isConnected) return document.removeEventListener('mousedown', outside);
@@ -2614,12 +2653,15 @@ function richEditor(value, onCommit) {
     return any;
   };
 
-  // 下線を付ける（u が null なら外す）。選んだ範囲の、すでにある下線は付け替える
-  const applyUnderline = (u) => {
+  // 選んだ範囲を、make() で作る要素で包む（make が null なら外す）。sel は同じ種類の要素（下線・大きさ）を見分ける。
+  // 選んだ範囲の中にある同じ種類の要素は外し、外側にある同じ種類の要素からは出す（一部を選んだときは、その前後に残す）。
+  // keep なら、包んだあとも同じ文字を選んだままにする
+  const wrapSelection = (selector, make, keep) => {
     const sel = getSelection();
-    if (!sel.rangeCount) return;
+    if (!sel.rangeCount) return false;
     const range = sel.getRangeAt(0);
-    if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return status('下線を付ける文字を選んでください', true);
+    if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return false;
+    const els = [];
     for (const d of blocksIn(range)) {
       const r = document.createRange();
       r.selectNodeContents(d);
@@ -2627,17 +2669,11 @@ function richEditor(value, onCommit) {
       if (d.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
       if (r.collapsed) continue;
       const frag = r.extractContents();
-      for (const x of frag.querySelectorAll('u')) x.replaceWith(...x.childNodes);
-      let el;
-      if (u) {
-        const tmp = document.createElement('div');
-        tmp.innerHTML = underlineHTML(u, '', (src) => S.imageURLs.get(src) || '');
-        el = tmp.firstChild;
-      } else el = document.createElement('span');
+      for (const x of frag.querySelectorAll(selector)) x.replaceWith(...x.childNodes);
+      const el = (make && make()) || document.createElement('span');
       el.append(frag);
       r.insertNode(el);
-      // 外側にある下線から出す（下線の中の一部を選んだときは、その前後に下線を残す）
-      for (let o = el.parentElement?.closest('u'); o && ed.contains(o); o = el.parentElement?.closest('u')) {
+      for (let o = el.parentElement?.closest(selector); o && ed.contains(o); o = el.parentElement?.closest(selector)) {
         const rb = document.createRange();
         rb.setStart(o, 0);
         rb.setEndBefore(el);
@@ -2650,12 +2686,45 @@ function richEditor(value, onCommit) {
         after.append(ra.extractContents());
         o.replaceWith(before, ...o.childNodes, after);
       }
-      if (!u) el.replaceWith(...el.childNodes);
+      els.push(el);
     }
-    // 選択を外し、空になった下線を消す
-    for (const x of ed.querySelectorAll('u')) if (!x.textContent) x.remove();
+    // 空になった要素を消す
+    for (const x of ed.querySelectorAll(selector)) if (!x.textContent) x.remove();
+    const nr = document.createRange();
+    if (keep && els.length) {
+      nr.setStartBefore(els[0]);
+      nr.setEndAfter(els[els.length - 1]);
+    }
+    if (!make) {
+      // 外したときは、包んでいた仮の要素をほどく（選択はその前後に置く）
+      for (const el of els) el.replaceWith(...el.childNodes);
+    }
     sel.removeAllRanges();
+    if (keep && els.length && make) sel.addRange(nr);
     commit();
+    return true;
+  };
+
+  // 下線を付ける（u が null なら外す）。選んだ範囲の、すでにある下線は付け替える
+  const applyUnderline = (u) => {
+    const ok = wrapSelection('u', u ? () => {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = underlineHTML(u, '', (src) => S.imageURLs.get(src) || '');
+      return tmp.firstChild;
+    } : null);
+    if (!ok) status('下線を付ける文字を選んでください', true);
+  };
+
+  // 一部の文字の大きさ（pt）。ボックスの文字の大きさと同じなら、大きさの指定を外す
+  const applySize = (n) => {
+    const ok = wrapSelection('span.fs', n === base ? null : () => {
+      const sp = document.createElement('span');
+      sp.className = 'fs';
+      sp.dataset.size = String(n);
+      sp.style.fontSize = `${+(n / base).toFixed(4)}em`;
+      return sp;
+    }, true);
+    if (!ok) status('大きさを変える文字を選んでください', true);
   };
 
   // 箇条書きにする段落：カーソルのある段落（選んだ段落）。欄にカーソルが無ければ全部の段落
@@ -2766,6 +2835,13 @@ function serializeRich(root) {
           continue;
         }
         const t = TAGS[c.nodeName];
+        // 一部の文字の大きさ：<span class="fs" data-size>（色も付いていれば、その色も書く）
+        if (c.nodeName === 'SPAN' && c.classList.contains('fs')) {
+          const cc = c.style?.color ? toHex6(c.style.color) : null;
+          const ct = cc && cc !== NO_COLOR.slice(1).toUpperCase() ? cc : null;
+          out += `${ct ? `<color #${ct}>` : ''}<size ${+c.dataset.size}>${inline(c)}</size>${ct ? '</color>' : ''}`;
+          continue;
+        }
         // 下線：<u>（一重線）、<u class="ud">（二重線）、<u class="ui" data-img data-w>（画像の線）
         if (c.nodeName === 'U') {
           const open = c.classList.contains('ui') ? `<u img="${c.dataset.img}" w="${c.dataset.w || 2}">` : c.classList.contains('ud') ? '<u double>' : '<u>';
@@ -2800,6 +2876,7 @@ function serializeRich(root) {
   return paras.join('\n')
     .replace(/<(b|i|sup|sub)><\/\1>/g, '')
     .replace(/<u[^>]*><\/u>/g, '')
+    .replace(/<size [\d.]+><\/size>/g, '')
     .replace(/<color #[0-9A-F]{6}><\/color>/g, '')
     // 隣り合う同じ色はまとめる
     .replace(/<color (#[0-9A-F]{6})>((?:(?!<\/?color)[\s\S])*)<\/color><color \1>/g, '<color $1>$2');

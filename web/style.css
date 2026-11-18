@@ -250,9 +250,9 @@ legend { padding: 0 4px 0 0; }
 .rich-under { text-decoration: underline; font-family: 'Times New Roman', serif; font-size: 16px; }
 .rich-sup, .rich-sub { font-family: 'Times New Roman', serif; }
 .rich-arrow { min-width: 18px !important; padding: 0 2px !important; font-size: 11px; font-family: inherit; }
-.rich-colorA { flex-direction: column; gap: 1px; }
-.rich-colorA .a { font-family: 'Times New Roman', serif; font-size: 15px; line-height: 1; }
-.rich-colorA .bar { display: block; width: 16px; height: 4px; }
+.rich-colorA { gap: 3px; }
+.rich-colorA .a { font-family: 'Times New Roman', serif; font-size: 16px; line-height: 1; }
+.rich-colorA .bar { display: block; width: 12px; height: 12px; border-radius: 2px; border: 1px solid rgba(0,0,0,.2); }
 .rich-sep { width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
 .rich-drop { position: relative; display: inline-flex; }
 .rich-menu { position: absolute; top: 100%; left: 0; z-index: 30; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.15); padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
@@ -278,3 +278,6 @@ legend { padding: 0 4px 0 0; }
 .rich-bar .rich-drop { position: static; }
 .rich-bar .rich-menu { left: 0; right: 0; min-width: 0; }
 .rich-img .line { width: 100%; }
+.rich-size { width: 3.6em; height: 28px; }
+.rich-unit { color: var(--muted); font-size: 12px; margin-right: 4px; }
+.rich-menu .rich-item { white-space: normal; }

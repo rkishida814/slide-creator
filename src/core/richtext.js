@@ -7,8 +7,9 @@
 //   <li>      … 段落の頭に書くと、その段落を箇条書きにする（行頭に「•」。折り返した行は文字の頭に揃う）
 //   <li hidden> … 「•」を描かない箇条書き（字下げだけ。前の箇条書きの文字の頭に揃える）
 //   <color #RRGGBB>色を付ける部分</color> … 一部の文字の色
+//   <size 18>大きさを変える部分</size> … 一部の文字の大きさ（pt）
 // 例: "New bone area (mm<sup>2</sup>)"、"<color #C00000>有意差あり</color>"、"<li>1 つ目\n<li>2 つ目"
-const TAG = /<(\/?)(b|i|sup|sub)>|<color\s+#?([0-9a-fA-F]{6})\s*>|<\/(color)>|<br\s*\/?>|<u(\s[^>]*)?>|<\/(u)>|<li(?:\s+hidden)?>/gi;
+const TAG = /<(\/?)(b|i|sup|sub)>|<color\s+#?([0-9a-fA-F]{6})\s*>|<\/(color)>|<br\s*\/?>|<u(\s[^>]*)?>|<\/(u)>|<li(?:\s+hidden)?>|<size\s+([\d.]+)\s*(?:pt)?\s*>|<\/(size)>/gi;
 
 // 段落に分ける
 export function paragraphs(s) {
@@ -43,6 +44,7 @@ export function parseRich(s) {
   const st = { b: 0, i: 0, sup: 0, sub: 0 };
   const colors = []; // 色の入れ子（いちばん内側が効く）
   const unders = []; // 下線の入れ子（いちばん内側が効く）
+  const sizes = []; // 文字の大きさの入れ子（いちばん内側が効く）
   let last = 0;
   const src = String(s ?? '');
   const push = (text) => {
@@ -50,13 +52,16 @@ export function parseRich(s) {
     const g = { text, b: st.b > 0, i: st.i > 0, sup: st.sup > 0, sub: st.sub > 0 };
     if (colors.length) g.color = colors[colors.length - 1];
     if (unders.length) g.u = unders[unders.length - 1];
+    if (sizes.length) g.size = sizes[sizes.length - 1];
     out.push(g);
   };
   for (const m of src.matchAll(TAG)) {
-    const [all, close, tag, color, colorEnd, uAttr, uEnd] = m;
+    const [all, close, tag, color, colorEnd, uAttr, uEnd, size, sizeEnd] = m;
     push(src.slice(last, m.index));
     last = m.index + all.length;
-    if (color) colors.push(color.toUpperCase());
+    if (size) sizes.push(+size);
+    else if (sizeEnd) sizes.pop();
+    else if (color) colors.push(color.toUpperCase());
     else if (colorEnd) colors.pop();
     else if (uEnd) unders.pop();
     else if (/^<u[\s>]/i.test(all)) unders.push(underlineOf(uAttr));
@@ -72,13 +77,14 @@ export function parseRich(s) {
 }
 
 export function hasRich(s) {
-  return /<\/?(b|i|sup|sub|u)>|<u\s|<\/?color[\s>]|<br\s*\/?>|<li[\s>]|\n/i.test(String(s ?? ''));
+  return /<\/?(b|i|sup|sub|u)>|<u\s|<\/?color[\s>]|<br\s*\/?>|<li[\s>]|<\/?size[\s>]|\n/i.test(String(s ?? ''));
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
 
-// 1 つの段落 → HTML（段落の中の改行は <br>。brHTML で差し替えられる。srcURL は画像の線の画像の場所）
-export function richToHTML(s, brHTML = '<br>', srcURL = (x) => x) {
+// 1 つの段落 → HTML（段落の中の改行は <br>。brHTML で差し替えられる。srcURL は画像の線の画像の場所。
+// sizeCSS は一部の文字の大きさ（pt）を CSS の大きさにする。画面の編集欄では、ボックスの文字の大きさに対する比で出す）
+export function richToHTML(s, brHTML = '<br>', srcURL = (x) => x, sizeCSS = (n) => `${n}pt`) {
   return parseRich(s)
     .map((g) => {
       if (g.br) return brHTML;
@@ -88,6 +94,7 @@ export function richToHTML(s, brHTML = '<br>', srcURL = (x) => x) {
       if (g.i) h = `<i>${h}</i>`;
       if (g.b) h = `<b>${h}</b>`;
       if (g.u) h = underlineHTML(g.u, h, srcURL);
+      if (g.size) h = `<span class="fs" data-size="${g.size}" style="font-size:${sizeCSS(g.size)}">${h}</span>`;
       if (g.color) h = `<span class="fc" style="color:#${g.color}">${h}</span>`;
       return h;
     })

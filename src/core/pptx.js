@@ -103,6 +103,7 @@ function textRuns(text, f, paraSpace, glow, size = 24) {
       if (g.b || f.bold) options.bold = true;
       if (g.i || f.italic) options.italic = true;
       if (g.color) options.color = g.color;
+      if (g.size) options.fontSize = g.size;
       if (g.u && g.u.type !== 'img') options.underline = { style: g.u.type === 'double' ? 'dbl' : 'sng' };
       if (g.sup) options.superscript = true;
       else if (g.sub) options.subscript = true;
