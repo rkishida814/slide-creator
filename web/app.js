@@ -2412,16 +2412,30 @@ function textFields(box, node, inh) {
   };
   const f = node.font || {};
   const fi = inh.font || {};
+  // 「色」の欄：文字を選んでいれば、その部分の色を出して、その部分だけを変える（大きさの欄と同じ）。
+  // 選んでいなければ、ボックス全体の文字の色を出して変える
+  const boxColor = f.color ?? fi.color;
+  let rich = null;
+  const colorIn = colorEl(boxColor, (v) => {
+    if (rich?._hasSel()) return rich._applyColor(v || NO_COLOR);
+    return edit(box, ['font', 'color'], v || undefined);
+  });
+  rich = richEditor(wrapWhole(String(node.text ?? ''), f), {
+    base: f.size ?? fi.size ?? DEFAULT_SIZE,
+    path: box.path,
+    onBaseSize: (n) => edit(box, ['font', 'size'], n),
+    onSel: ({ selected, color }) => colorIn._show(selected ? color ?? boxColor : boxColor, selected),
+  }, (v) => {
+    S.keepPanel = box.path;
+    const off = box.src.mode === 'direct' ? undefined : false;
+    const pairs = [['text', v]];
+    if (f.bold) pairs.push([['font', 'bold'], off]);
+    if (f.italic) pairs.push([['font', 'italic'], off]);
+    S.pendingFit = [box.path];
+    editMany(box, pairs);
+  });
   fs.append(
-    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), { base: f.size ?? fi.size ?? DEFAULT_SIZE, path: box.path, onBaseSize: (n) => edit(box, ['font', 'size'], n) }, (v) => {
-      S.keepPanel = box.path;
-      const off = box.src.mode === 'direct' ? undefined : false;
-      const pairs = [['text', v]];
-      if (f.bold) pairs.push([['font', 'bold'], off]);
-      if (f.italic) pairs.push([['font', 'italic'], off]);
-      S.pendingFit = [box.path];
-      editMany(box, pairs);
-    })),
+    row('テキスト', rich),
     row('', checkEl('テキストの下に生じた余白を別のボックスにする', node.split_below !== false, (x) => {
       if (x) {
         S.pendingFit = [box.path];
@@ -2431,7 +2445,7 @@ function textFields(box, node, inh) {
     })),
     row('フォント（英語）', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
     row('フォント（日本語）', selectEl(JA_FONT_OPTS, f.family_ja ?? fi.family_ja ?? DEFAULT_FONT_JA, (v) => edit(box, ['font', 'family_ja'], v))),
-    row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
+    row('色', colorIn),
     ...textBgRows(box, node, edit),
     row('見出しアイコン', h2(
       selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a.split('/').pop()])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined)),
@@ -2634,13 +2648,45 @@ function richEditor(value, opts, onCommit) {
     if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer)) return;
     saved = sel.getRangeAt(0).cloneRange();
     if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
+    tellSel();
   };
+  // 範囲 r の最初の文字に付いている一部の色（"#RRGGBB"）。付いていなければ null
+  const colorAt = (r) => {
+    if (!r) return null;
+    const tw = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+    let t = null;
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+      if (!n.nodeValue.replace(/​/g, '') || !r.intersectsNode(n)) continue;
+      if (n === r.startContainer && r.startOffset >= n.nodeValue.length && !r.collapsed) continue; // 選んだ範囲が、この文字の後ろから始まる
+      if (n === r.endContainer && r.endOffset === 0 && !r.collapsed) continue;
+      t = n;
+      break;
+    }
+    for (let e = t?.parentElement; e && e !== ed; e = e.parentElement) {
+      const raw = e.nodeName === 'FONT' ? e.getAttribute('color') : e.style?.color;
+      const x = raw ? toHex6(raw) : null;
+      if (x) return x === NO_COLOR.slice(1).toUpperCase() ? null : `#${x}`;
+    }
+    return null;
+  };
+  // 選んだ範囲が変わったことを、設定欄の「色」に知らせる（選んだ部分の色を出すため）
+  const tellSel = () => opts.onSel?.({ selected: hasSel(), color: hasSel() ? colorAt(saved) : null });
   document.addEventListener('selectionchange', onSel);
   // 設定欄を作り直したとき（renderProps）に、選んでいた範囲を新しい欄へ写すための口
   wrap._getSaved = () => saved;
   wrap._setSaved = (r) => {
     saved = r;
     sizeIn.value = String(sizeAt(r));
+    tellSel();
+  };
+  // 文字を選んでいるか（カーソルだけなら false）
+  const hasSel = () => !!(saved && !saved.collapsed && ed.contains(saved.commonAncestorContainer));
+  wrap._hasSel = hasSel;
+  // 選んだ範囲に色を付ける（設定欄の「色」から。NO_COLOR なら一部の色を外す）
+  wrap._applyColor = (v) => {
+    restoreSel();
+    applyColor(v);
+    saveSel();
   };
   const grpSize = h('span', 'rich-group');
   grpSize.append(sizeIn, h('span', 'rich-unit', 'pt'));
@@ -2699,17 +2745,32 @@ function richEditor(value, opts, onCommit) {
   const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${curColor()}"></span>`, '選んだ部分に色を付ける', () => applyColor(curColor()));
   const grpColor = h('span', 'rich-group');
   grpColor.append(colorA, dropMenu('文字の色', (menu, close) => {
+    const use = (c) => {
+      S.lastTextColor = c;
+      colorA.querySelector('.bar').style.background = c;
+      restoreSel();
+      applyColor(c);
+      close();
+    };
+    // このスライドで使っている色
+    const used = usedColors();
+    if (used.length) {
+      menu.append(h('div', 'rich-menu-label', 'このスライドで使っている色'));
+      const sw = h('div', 'rich-swatches');
+      for (const c of used) {
+        const b = iconBtn('rich-swatch', '', c, () => use(c));
+        b.style.background = c;
+        sw.append(b);
+      }
+      menu.append(sw);
+    }
     const pick = document.createElement('input');
     pick.type = 'color';
     pick.className = 'rich-color';
-    pick.value = curColor();
-    pick.onchange = () => {
-      S.lastTextColor = pick.value;
-      colorA.querySelector('.bar').style.background = pick.value;
-      restoreSel();
-      applyColor(pick.value);
-      close();
-    };
+    pick.setAttribute('list', refreshColorList());
+    // 選んだ部分に色が付いていれば、その色を出す
+    pick.value = (hasSel() && colorAt(saved)) || curColor();
+    pick.onchange = () => use(pick.value);
     const row = h('div', 'rich-menu-row');
     row.append(h('span', null, 'ほかの色'), pick);
     menu.append(row, iconBtn('rich-item', '色を外す', '', () => {
@@ -3380,13 +3441,58 @@ function colorEl(value, onCommit) {
   const wrap = h('span', 'in');
   const c = document.createElement('input');
   c.type = 'color';
+  // 色を選ぶ画面に、このスライドで使っている色を候補として出す
+  c.setAttribute('list', refreshColorList());
   const norm = normColor(value);
   c.value = norm || '#000000';
   const t = textEl(value ?? '', '（なし）', (v) => onCommit(v));
   c.oninput = () => (t.value = c.value);
   c.onchange = () => onCommit(c.value);
   wrap.append(c, t);
+  // 出す色を変える（テキストの欄で選んだ部分の色など）。part なら「選んだ部分」と分かるように印を付ける
+  wrap._show = (v, part = false) => {
+    if (document.activeElement === t) return;
+    c.value = normColor(v) || '#000000';
+    t.value = v ?? '';
+    wrap.classList.toggle('part', !!part);
+    c.title = part ? '選んだ部分の色' : '';
+  };
   return wrap;
+}
+
+// いまのスライドで使っている色（多く使っている順。"#RRGGBB"）。文字の色・一部の文字の色・文字の下地・光彩・背景・枠線
+function usedColors() {
+  const s = realSlide();
+  if (!s) return [];
+  const count = new Map();
+  const add = (c) => {
+    const x = c && typeof c === 'string' ? toHex6(c) : null;
+    if (x && x !== NO_COLOR.slice(1).toUpperCase()) count.set(x, (count.get(x) || 0) + 1);
+  };
+  for (const e of s.elements || []) {
+    if (e.type === 'text') {
+      add(e.font?.color);
+      add(e.font?.glow?.color);
+      add(e.text_bg?.color);
+      for (const m of String(e.text).matchAll(/<color\s+#?([0-9a-fA-F]{6})\s*>/gi)) add(m[1]);
+    } else if (e.type === 'rect') {
+      add(e.fill);
+      add(e.border?.color);
+    }
+  }
+  return [...count.entries()].sort((a, b) => b[1] - a[1]).map(([x]) => `#${x}`);
+}
+
+// 色の入力欄の候補（<datalist>）を、いまのスライドの色に作り直し、その id を返す
+function refreshColorList() {
+  let dl = document.getElementById('used-colors');
+  if (!dl) {
+    dl = document.createElement('datalist');
+    dl.id = 'used-colors';
+    document.body.append(dl);
+  }
+  dl.replaceChildren(...usedColors().map((c) => Object.assign(document.createElement('option'), { value: c.toLowerCase() })));
+  return dl.id;
 }
 function btn(label, fn) {
   const b = h('button', null, label);

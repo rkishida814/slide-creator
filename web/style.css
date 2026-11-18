@@ -284,3 +284,9 @@ legend { padding: 0 4px 0 0; }
 .rich-sup sup, .rich-sub sub { font-size: .65em; line-height: 0; position: relative; }
 .rich-sup sup { vertical-align: 0; top: -0.55em; }
 .rich-sub sub { vertical-align: 0; top: 0.35em; }
+/* 文字の色のメニュー：このスライドで使っている色の見本 */
+.rich-swatches { display: flex; flex-wrap: wrap; gap: 4px; }
+.rich-menu .rich-swatch { width: 22px !important; height: 22px !important; min-width: 0; padding: 0 !important; border: 1px solid rgba(0,0,0,.25); border-radius: 4px; }
+.rich-menu .rich-swatch:hover { outline: 2px solid var(--accent, #2b6cb0); outline-offset: 1px; }
+/* 設定欄の「色」が、テキストの欄で選んだ部分の色を出しているとき */
+.in.part input[type=color] { outline: 2px solid var(--accent, #2b6cb0); outline-offset: 1px; }
