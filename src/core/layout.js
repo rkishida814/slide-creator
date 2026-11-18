@@ -225,17 +225,25 @@ function pushBackground(bg, rect, path, ctx) {
     ctx.issues.push({ level: 'error', path, msg: `背景の画像が読めない: ${bg.image}` });
     return;
   }
-  let crop = [0, 0, 1, 1];
+  // 背景の画像のトリミング：crop: [左, 上, 右, 下]（元画像に対する割合）。残した範囲を、mode に従って広げる
+  const c0 = Array.isArray(bg.crop) && bg.crop.length === 4 && bg.crop.every((v) => typeof v === 'number') ? bg.crop : [0, 0, 1, 1];
+  const cw = c0[2] - c0[0];
+  const ch = c0[3] - c0[1];
+  if (!(cw > 0 && ch > 0)) {
+    ctx.issues.push({ level: 'error', path, msg: `背景の crop の範囲が無い: ${JSON.stringify(bg.crop)}` });
+    return;
+  }
+  let crop = [...c0];
   if (bg.mode === 'cover') {
-    // 枠いっぱいに広げ、はみ出しを中央から切る
-    const ia = nat.w / nat.h;
+    // 枠いっぱいに広げ、はみ出しを中央から切る（トリミングで残した範囲の中で）
+    const ia = (cw * nat.w) / (ch * nat.h);
     const ba = rect.w / rect.h;
     if (ia > ba) {
       const keep = ba / ia;
-      crop = [(1 - keep) / 2, 0, (1 + keep) / 2, 1];
+      crop = [c0[0] + (cw * (1 - keep)) / 2, c0[1], c0[0] + (cw * (1 + keep)) / 2, c0[3]];
     } else {
       const keep = ia / ba;
-      crop = [0, (1 - keep) / 2, 1, (1 + keep) / 2];
+      crop = [c0[0], c0[1] + (ch * (1 - keep)) / 2, c0[2], c0[1] + (ch * (1 + keep)) / 2];
     }
   }
   const dpi = Math.min(((crop[2] - crop[0]) * nat.w) / (rect.w / perInch(ctx.unit)), ((crop[3] - crop[1]) * nat.h) / (rect.h / perInch(ctx.unit)));

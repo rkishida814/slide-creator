@@ -113,7 +113,7 @@ slides:
 
 - `id`：名前。CLI で `--node photos` や `s1/photos` と指定できる。テンプレートの差し込み口にもなる
 - `padding`：余白。`background_inset: true` なら、背景と枠線も余白の分だけ内側に縮める。`1` / `[上下, 左右]` / `[上, 右, 下, 左]`。テキストのボックス（とテキストを入れる前の空のボックス）は、書かなければ上下左右に 0.5 cm の余白を設ける（なくすときは `padding: 0`）
-- `background`：色なら `"#RRGGBB"`。画像なら `{image: x.png, mode: stretch | cover, color: 下地の色}`。mode は、stretch（既定。縦横比を変えてボックスいっぱいに広げる）、cover（縦横比を保って広げ、はみ出しを切る）。文書の一番上に書くと全スライドの背景になる（スライドごとの `background` が優先）
+- `background`：色なら `"#RRGGBB"`。画像なら `{image: x.png, mode: stretch | cover, color: 下地の色, crop: [左, 上, 右, 下]}`（crop は画像のトリミング。元画像に対する割合で、残した範囲を mode に従って広げる）。mode は、stretch（既定。縦横比を変えてボックスいっぱいに広げる）、cover（縦横比を保って広げ、はみ出しを切る）。文書の一番上に書くと全スライドの背景になる（スライドごとの `background` が優先）
   - 背景だけを分けるときは、ボックスと同じ形の木で書く：`background: {split: rows, ratio: [1, 2], children: [{background: "#eeeeee"}, {background: {image: x.png}}]}`。中身のボックスの分割とは関係なく、そのボックスの背景の範囲を分ける（中は余白なしで敷く）。画面の「背景を編集」で作る。背景の枠に `padding` を書くと、その分だけ背景を枠の内側に縮める。画面の背景モードでは、枠の「余白」と「幅・高さ」を変えられる（分けた向きの長さは隣の枠とやり取りし、分けていない向きの長さは、左（上）はそのままに右（下）の余白で合わせる）
 - `border: {width: 1 (pt), color: "#RRGGBB"}`
 

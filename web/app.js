@@ -271,7 +271,7 @@ function setupFrame() {
     if (S.layer !== 'block' && drag.swap && (S.sel || []).length > 1 && S.sel.includes(b.path)) drag.row = rowSwapPlan();
   });
   doc.addEventListener('mousemove', (e) => {
-    if (!drag) return hover(pickAt(e));
+    if (!drag) return hover(S.layer === 'bg' ? bgHoverAt(e) : pickAt(e));
     if (!drag.moving && Math.hypot(e.clientX - drag.x, e.clientY - drag.y) > 6) {
       drag.moving = true;
       hover(null);
@@ -1001,12 +1001,115 @@ function transposeSplit(lca, range = null) {
   return fileChanged(file);
 }
 
+// 左右（上下）に並ぶ列の、上下（左右）の分け方の数がそろっていなくても、選んだ範囲の上端と下端（左端と右端）で
+// どの列も分かれていれば、各列を「上・選んだ段・下」の 3 つに分けて、段ごとの左右の並びに組み替える。見た目は変わらない。
+// 例：[[図, 空き, 空き], [図と文, 空き, 空き], [[ビーカー, 空き], 空き, 空き]] の 2 段目の空きを 3 つ選んだとき
+// range（{ i0, i1 }）なら、その列だけを組み替え、ほかの列はそのまま残す。組み替えられないときは null
+function bandSplit(lca, r, range = null) {
+  if (!lca || lca.kind !== 'split' || !lca.src || lca.src.mode !== 'direct' || !r) return null;
+  const D = lca.node.split;
+  const P = D === 'rows' ? 'cols' : 'rows';
+  const unit = S.layout.unit;
+  const pos = (b) => (P === 'rows' ? b.rect.y : b.rect.x);
+  const L = (b) => (P === 'rows' ? b.rect.h : b.rect.w);
+  const top = P === 'rows' ? r.y : r.x;
+  const bot = top + (P === 'rows' ? r.h : r.w);
+  const tol = Math.max(0.02, (S.layout.width || 0) * 0.0005);
+  const slide = curSlide();
+  const allKids = slide.boxes.filter((b) => b.parent === lca.path);
+  const N = allKids.length;
+  const { file, path } = lca.src;
+  const doc = S.files[file].doc;
+  const allNodes = getJS(doc, [...path, 'children']);
+  if (!Array.isArray(allNodes) || allNodes.length !== N) return null;
+  const allRatio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === N ? plain(lca.node.ratio) : Array(N).fill(1);
+  const i0 = range ? range.i0 : 0;
+  const i1 = range ? range.i1 : N - 1;
+  if (i1 - i0 < 1) return null;
+  const ok = ['split', 'ratio', 'children', 'gap', 'id', 'split_below'];
+  const plainSplit = (nd) => nd && typeof nd === 'object' && nd.split === P && Array.isArray(nd.children) && !Object.entries(nd).some(([x, v]) => v != null && !ok.includes(x));
+  // 列の中身を、同じ向きの入れ子を開いて 1 列に並べる（比率は、この列の比率 1 あたりの長さで直す）
+  const flat = (nd, b, g0) => {
+    const sb = slide.boxes.filter((x) => x.parent === b.path);
+    if (sb.length !== nd.children.length) return null;
+    const sr = Array.isArray(nd.ratio) && nd.ratio.length === sb.length ? nd.ratio : Array(sb.length).fill(1);
+    let k = null;
+    sb.forEach((x, j) => {
+      if (k == null && typeof sr[j] === 'number' && sr[j] > 0) k = L(x) / sr[j];
+    });
+    const out = [];
+    for (let j = 0; j < sb.length; j++) {
+      const c = nd.children[j];
+      if (plainSplit(c) && Math.abs(toUnit(c.gap ?? 0, unit) - g0) <= 1e-6) {
+        const inner = flat(c, sb[j], g0);
+        if (!inner) return null;
+        for (const e of inner) out.push({ ...e, ratio: typeof e.ratio === 'string' ? e.ratio : k ? round4(L(e.box) / k) : `${round4(L(e.box))}${unit}` });
+      } else out.push({ node: c, box: sb[j], ratio: sr[j] });
+    }
+    return out;
+  };
+  let gap0 = null;
+  const cols = [];
+  for (let i = i0; i <= i1; i++) {
+    const nd = allNodes[i];
+    if (!plainSplit(nd)) return null;
+    const g = toUnit(nd.gap ?? 0, unit);
+    if (gap0 == null) gap0 = g;
+    if (Math.abs(g - gap0) > 1e-6) return null;
+    const f = flat(nd, allKids[i], g);
+    if (!f) return null;
+    // 選んだ範囲の上端・下端で分かれているところ
+    const a = f.findIndex((e) => Math.abs(pos(e.box) - top) <= tol);
+    const z = f.findIndex((e) => Math.abs(pos(e.box) + L(e.box) - bot) <= tol);
+    if (a < 0 || z < a) return null;
+    cols.push([f.slice(0, a), f.slice(a, z + 1), f.slice(z + 1)]);
+  }
+  // どの列も、上・下の組があるか無いかがそろっていること
+  for (const g of [0, 2]) if (new Set(cols.map((c) => c[g].length > 0)).size > 1) return null;
+  const len = (es) => es.reduce((s2, e) => s2 + L(e.box), 0) + gap0 * Math.max(0, es.length - 1);
+  const group = (es) => (es.length === 1 ? es[0].node : { split: P, ratio: es.map((e) => e.ratio), ...(gap0 ? { gap: `${round4(gap0)}${unit}` } : {}), children: es.map((e) => e.node) });
+  const bands = [0, 1, 2].filter((g) => cols[0][g].length > 0);
+  if (bands.length < 2) return null;
+  const colRatio = allRatio.slice(i0, i1 + 1);
+  const content = {
+    split: P,
+    ratio: bands.map((g) => round4(len(cols[0][g]))),
+    ...(gap0 ? { gap: `${round4(gap0)}${unit}` } : {}),
+    children: bands.map((g) => ({
+      split: D,
+      ratio: colRatio,
+      ...(lca.node.gap != null ? { gap: lca.node.gap } : {}),
+      children: cols.map((c) => group(c[g])),
+    })),
+  };
+  if (range && (i0 > 0 || i1 < N - 1)) {
+    const LD = (b) => (D === 'rows' ? b.rect.h : b.rect.w);
+    const part = allRatio.slice(i0, i1 + 1);
+    const gapD = toUnit(lca.node.gap ?? 0, unit);
+    const merged = part.every((x) => typeof x === 'number')
+      ? round4(part.reduce((s2, x) => s2 + x, 0))
+      : `${round4(allKids.slice(i0, i1 + 1).reduce((s2, b) => s2 + LD(b), 0) + gapD * (i1 - i0))}${unit}`;
+    const children = [...allNodes.slice(0, i0), content, ...allNodes.slice(i1 + 1)];
+    const ratio = [...allRatio.slice(0, i0), merged, ...allRatio.slice(i1 + 1)];
+    keepOneFlexible(ratio, i0);
+    setProp(doc, path, 'children', children);
+    setProp(doc, path, 'ratio', ratio);
+  } else {
+    const cur = getJS(doc, path) || {};
+    const keep = Object.fromEntries(Object.entries(cur).filter(([x]) => !CONTENT_KEYS.includes(x) && x !== 'gap'));
+    replaceNode(doc, path, { ...keep, ...content });
+  }
+  return fileChanged(file);
+}
+
 // 選んだ範囲がそのままでは扱えないとき、並びを組み替えてから、同じ範囲を選び直して fn をやり直す
 function retryAfterTranspose(lca, fn) {
   const r = selectionRect();
-  // 全部の部分を組み替えられなければ、選んだ範囲にかかる部分だけを組み替える
+  // 全部の部分を組み替えられなければ、選んだ範囲にかかる部分だけを組み替える。
+  // それもできなければ、選んだ範囲の上端と下端で、各列を「上・選んだ段・下」に分けて組み替える
   const hit = r && lca ? curSlide().boxes.filter((b) => b.parent === lca.path).map((b, i) => (overlaps(b.rect, r) ? i : -1)).filter((i) => i >= 0) : [];
-  const done = transposeSplit(lca) || (hit.length >= 2 ? transposeSplit(lca, { i0: hit[0], i1: hit[hit.length - 1] }) : null);
+  const rng = hit.length >= 2 ? { i0: hit[0], i1: hit[hit.length - 1] } : null;
+  const done = transposeSplit(lca) || (rng ? transposeSplit(lca, rng) : null) || (rng ? bandSplit(lca, r, rng) : null);
   if (!done) return null;
   return done.then(() => {
     const e = 0.02; // 組み替えで長さを丸めた分のずれを許す（transposeSplit の判定と同じ）
@@ -1583,7 +1686,7 @@ function renderPropsInner() {
     paddingRow(box, node),
     ...(isBgTree(node.background)
       ? [row('背景', h('span', 'note', '分けて設定している（「背景を編集」で変える）'))]
-      : bgRows(node.background, (v) => edit(box, 'background', v))),
+      : bgRows(node.background, (v) => edit(box, 'background', v), { rect: box.rect })),
     row('', bgEditBtn(box)),
     row('枠線', h2(
       numEl(node.border?.width ?? 0, '', (v) => edit(box, 'border', +v > 0 ? { width: +v, color: node.border?.color || '#333333' } : undefined)),
@@ -3202,7 +3305,8 @@ function serializeRich(root) {
 // 画像の背景は、既定では縦横比を変えてボックスいっぱいに広げる
 const BG_OPTS = [['', 'なし'], ['color', '色'], ['image', '画像']];
 const BG_MODE_OPTS = [['stretch', '縦横比を変えて、ボックスいっぱいに広げる'], ['cover', '縦横比を保って広げ、はみ出た部分を切る']];
-function bgRows(cur, write) {
+// opts.rect：背景を敷く枠（トリミングの画面で、枠の縦横比に合わせるため）
+function bgRows(cur, write, opts = {}) {
   const kind = !cur ? '' : typeof cur !== 'object' ? 'color' : cur.image ? 'image' : cur.color ? 'color' : '';
   const rows = [
     row('背景', selectEl(BG_OPTS, kind, (v) => {
@@ -3222,6 +3326,38 @@ function bgRows(cur, write) {
       const { mode: _m, tile: _t, ...rest } = cur;
       write(v === 'cover' ? { ...rest, mode: v } : rest);
     })));
+    // トリミング：画像のボックスと同じく、残す範囲の左端・上端・右端・下端（元画像に対する割合）
+    const base = plain(cur);
+    const crop = Array.isArray(base.crop) && base.crop.length === 4 ? base.crop : [0, 0, 1, 1];
+    const setCrop = (c) => {
+      const { crop: _c, ...rest } = base;
+      return write(c ? { ...rest, crop: c } : rest);
+    };
+    const cropRow = h2(...crop.map((c, i) => numEl(c, '', (v) => {
+      const next = [...crop];
+      next[i] = +v;
+      setCrop(next);
+    }, 0.01)));
+    cropRow.classList.add('crop4');
+    rows.push(row('トリミング', cropRow));
+    const acts = h('div', 'actions');
+    acts.append(btn('画像を見ながらトリミング…', async () => {
+      const nat = S.imageSizes.get(String(base.image));
+      if (!nat) return status('画像が読めません', true);
+      const r = opts.rect;
+      const result = await openCrop({
+        src: String(base.image),
+        url: S.imageURLs.get(String(base.image)),
+        natural: nat,
+        crop,
+        cellAspect: r && r.h > 0 ? r.w / r.h : nat.w / nat.h,
+        lockDefault: base.mode === 'cover',
+      });
+      if (result === 'clear') return setCrop(null);
+      if (Array.isArray(result)) return setCrop(result);
+    }));
+    if (base.crop) acts.append(btn('トリミングを外す', () => setCrop(null)));
+    rows.push(acts);
   }
   return rows;
 }
@@ -3312,6 +3448,15 @@ function bgHostOf(b) {
 function bgOwnerOf(b) {
   for (let x = b; x; x = x.parent ? findReal(x.parent) : null) if (hasOwnBg(x)) return x;
   return b;
+}
+
+// 背景モードでマウスを乗せたときに示すもの（クリックしたときに開く・選ぶものと同じ）。
+// もっと内側の背景が付いたボックスがあればそのボックス、無ければ、開いている背景の枠。背景と関係のない中身のボックスは示さない
+function bgHoverAt(e) {
+  const r = realLeafAt(e);
+  const owner = r ? bgOwnerOf(bgHostOf(r)) : null;
+  if (owner && owner.path !== S.bgEdit && hasOwnBg(owner)) return owner;
+  return leafAt(e);
 }
 
 // ボックス x に背景が付いているか。中身の無い背景（{}。内部の印 __src などだけのもの）や、
@@ -3435,7 +3580,8 @@ async function leaveBgHost(nextLayer, nextSel) {
   setSel(nextSel);
   if (host?.src) {
     const t = getJS(S.files[host.src.file].doc, [...host.src.path, 'background']);
-    if (isBgTree(t) && !t.split && !t.grid) {
+    // 余白を付けた背景は、1 つの背景の書き方では書けないので、木のまま残す（戻すと余白が消えていた）
+    if (isBgTree(t) && !t.split && !t.grid && t.padding == null) {
       const v = t.background == null || (typeof t.background === 'object' && !Object.keys(t.background).length) ? undefined : t.background;
       return edit(host, 'background', v);
     }
@@ -3511,8 +3657,14 @@ function renderBgProps(el) {
       files.add(b.src.file);
     }
     for (const f of files) fileChanged(f);
-  }));
+  }, { rect: bgInner(first) }));
   el.append(fsBg);
+}
+
+// 背景の枠 b の、余白を除いた範囲（背景を敷く範囲）
+function bgInner(b) {
+  const p = parseBox(b.node?.padding, S.layout.unit);
+  return { x: b.rect.x + p.l, y: b.rect.y + p.t, w: b.rect.w - p.l - p.r, h: b.rect.h - p.t - p.b };
 }
 
 const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト' };
