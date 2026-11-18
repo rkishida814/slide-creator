@@ -242,3 +242,29 @@ legend { padding: 0 4px 0 0; }
 .rich-btn { white-space: nowrap; }
 .rich-txt { font-family: inherit; }
 .rich-group { display: inline-flex; gap: 4px; align-items: center; white-space: nowrap; }
+
+/* 文字の書式のボタン（PowerPoint のホームのボタンに似せる） */
+.rich-bar .rich-btn { min-width: 30px; height: 28px; padding: 0 6px; display: inline-flex; align-items: center; justify-content: center; }
+.rich-bold { font-weight: 700; font-family: 'Times New Roman', serif; font-size: 16px; }
+.rich-italic { font-style: italic; font-family: 'Times New Roman', serif; font-size: 16px; }
+.rich-under { text-decoration: underline; font-family: 'Times New Roman', serif; font-size: 16px; }
+.rich-sup, .rich-sub { font-family: 'Times New Roman', serif; }
+.rich-arrow { min-width: 18px !important; padding: 0 2px !important; font-size: 11px; font-family: inherit; }
+.rich-colorA { flex-direction: column; gap: 1px; }
+.rich-colorA .a { font-family: 'Times New Roman', serif; font-size: 15px; line-height: 1; }
+.rich-colorA .bar { display: block; width: 16px; height: 4px; }
+.rich-sep { width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
+.rich-drop { position: relative; display: inline-flex; }
+.rich-menu { position: absolute; top: 100%; left: 0; z-index: 30; background: #fff; border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px rgba(0,0,0,.15); padding: 6px; display: flex; flex-direction: column; gap: 4px; min-width: 220px; }
+.rich-menu[hidden] { display: none; }
+.rich-menu .rich-item { justify-content: flex-start !important; text-align: left; font-family: inherit; width: 100%; height: auto !important; padding: 4px 8px !important; }
+.rich-menu-label { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.rich-menu-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rich-menu-row select { max-width: 150px; }
+.rich-menu-row .rich-w { width: 4em; }
+/* 編集欄の中の、箇条書きと下線 */
+.rich > div.li { position: relative; padding-left: 1.1em; }
+.rich > div.li::before { content: '\2022'; position: absolute; left: 0.1em; }
+.rich u.ud { text-decoration-style: double; }
+.rich u.ui { text-decoration: none; background-repeat: no-repeat; background-position: 0 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+.rich-menu u.ud { text-decoration-style: double; }

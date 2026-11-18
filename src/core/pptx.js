@@ -4,7 +4,7 @@
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
 import { DEFAULT_FONT, DEFAULT_FONT_JA, pptxFontName, glowOf } from './html.js';
-import { parseRich, hasRich, paragraphs } from './richtext.js';
+import { parseRich, hasRich, paragraphs, isBullet } from './richtext.js';
 
 const hex = (c, fb) => {
   if (!c) return fb;
@@ -18,9 +18,10 @@ const hex = (c, fb) => {
  * @param PptxGen   pptxgenjs のクラス
  * @param layout    layoutDoc の結果
  * @param imageRef  (src) => { path } | { data: 'image/png;base64,...' }
+ * @param opts      { underlines: measureUnderlines の結果（画像の線を、測った位置に画像として置く） }
  * @returns pptxgenjs のインスタンス（writeFile / write で書き出す）
  */
-export async function buildPPTX(PptxGen, layout, imageRef) {
+export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
   const k = 1 / PER_INCH[layout.unit]; // キャンバスの単位 → インチ
   const pres = new PptxGen();
   pres.defineLayout({ name: 'SLIDE_CREATOR', width: layout.width * k, height: layout.height * k });
@@ -56,7 +57,7 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
         const f = e.font;
         const g = glowOf(f);
         const glow = g ? { color: hex(g.color, 'FFFFFF'), size: g.size, opacity: g.opacity } : undefined;
-        slide.addText(textRuns(e.text, f, e.para_space, glow), {
+        slide.addText(textRuns(e.text, f, e.para_space, glow, f.size), {
           ...(glow ? { glow } : {}),
           ...box,
           // 英語用と日本語用を「|」でつないで渡し、書き出した後で分ける（finishPPTX）
@@ -73,6 +74,10 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
           fit: 'none',
           objectName: e.path,
         });
+        // 画像の線：画面で測った位置に、画像を縦横比を保たずに置く
+        for (const u of (opts.underlines || []).filter((x) => x.slide === s.id && x.path === e.path)) {
+          slide.addImage({ ...(await imageRef(u.src)), x: u.rect.x * k, y: u.rect.y * k, w: u.rect.w * k, h: u.rect.h * k, altText: `${e.path} の下線` });
+        }
       }
     }
   }
@@ -80,7 +85,8 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
 }
 
 // 飾りも改行も無い文字はそのまま。あれば、区切り（run）の配列にする
-function textRuns(text, f, paraSpace, glow) {
+// 箇条書きの段落は、行頭に「•」を付け、折り返した行を文字の頭に揃える（字下げは文字の大きさの 1.1 倍。画面と同じ）
+function textRuns(text, f, paraSpace, glow, size = 24) {
   if (!hasRich(text)) return glow ? [{ text, options: { glow } }] : text;
   const runs = [];
   const paras = paragraphs(text);
@@ -97,6 +103,7 @@ function textRuns(text, f, paraSpace, glow) {
       if (g.b || f.bold) options.bold = true;
       if (g.i || f.italic) options.italic = true;
       if (g.color) options.color = g.color;
+      if (g.u && g.u.type !== 'img') options.underline = { style: g.u.type === 'double' ? 'dbl' : 'sng' };
       if (g.sup) options.superscript = true;
       else if (g.sub) options.subscript = true;
       if (soft) options.softBreakBefore = true;
@@ -106,6 +113,7 @@ function textRuns(text, f, paraSpace, glow) {
     if (soft) runs.push({ text: '', options: { softBreakBefore: true } });
     if (runs.length === start) runs.push({ text: '', options: {} }); // 空の段落
     if (pi > 0 && paraSpace > 0) runs[start].options.paraSpaceBefore = paraSpace;
+    if (isBullet(p)) runs[start].options.bullet = { indent: Math.round(size * 1.1 * 10) / 10 };
     if (pi < paras.length - 1) runs[runs.length - 1].options.breakLine = true;
   });
   return runs;

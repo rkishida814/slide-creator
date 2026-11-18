@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { renderHTML } from '../core/html.js';
+import { renderHTML, measureUnderlines } from '../core/html.js';
 import { PER_INCH } from '../core/units.js';
 
 const CANDIDATES = [
@@ -109,6 +109,16 @@ export async function measureText(project) {
       }
       return out;
     });
+  } finally {
+    await browser.close();
+  }
+}
+
+// 画像の線（<u img=…>）の位置を測る（PPTX に画像として置くため）
+export async function measureProjectUnderlines(project) {
+  const { browser, page } = await openProject(project, {});
+  try {
+    return await page.evaluate(`(${measureUnderlines.toString()})(document, ${project.layout.width})`);
   } finally {
     await browser.close();
   }

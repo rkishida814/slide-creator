@@ -1,8 +1,8 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
-import { renderHTML, loadUsedFonts, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
-import { richToHTML, paragraphs } from '../src/core/richtext.js';
+import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
+import { richToHTML, paragraphs, isBullet, underlineHTML } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, parseBox, isBgTree } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
@@ -86,6 +86,8 @@ function collectImages(node, out) {
   if (node.background?.image) out.add(String(node.background.image));
   if (isBgTree(node.background)) collectImages(node.background, out);
   if (node.icon) out.add(String(node.icon));
+  // 文字の中の画像の線（<u img="…">）
+  if (typeof node.text === 'string') for (const m of node.text.matchAll(/<u\s[^>]*img\s*=\s*(?:"([^"]*)"|([^\s>]+))/gi)) out.add(m[1] ?? m[2]);
   (node.children || []).forEach((c) => collectImages(c, out));
   (node.items || []).forEach((c) => collectImages(c, out));
 }
@@ -2399,7 +2401,7 @@ async function pickImageFile() {
 const SOFT_BREAK = '<span class="sb" contenteditable="false">↵</span><br>';
 function editorHTML(value) {
   return paragraphs(value)
-    .map((p) => `<div>${richToHTML(p, SOFT_BREAK) || '<br>'}</div>`)
+    .map((p) => `<div${isBullet(p) ? ' class="li"' : ''}>${richToHTML(p, SOFT_BREAK, (src) => S.imageURLs.get(src) || '') || '<br>'}</div>`)
     .join('');
 }
 
@@ -2419,44 +2421,203 @@ function richEditor(value, onCommit) {
     last = v;
     onCommit(v);
   };
-  for (const [cmd, label, title] of [['bold', 'B', '太字'], ['italic', 'I', '斜体'], ['superscript', 'x<sup>2</sup>', '上付き'], ['subscript', 'x<sub>2</sub>', '下付き']]) {
-    const b = h('button', `rich-btn rich-${cmd}`);
-    b.innerHTML = label;
+  // 書式のボタン（PowerPoint のホームの「フォント」「段落」に似せる）
+  // ボタンを押しても、テキストの欄の選択を保つ（mousedown で preventDefault）。▾ のメニューを開くときは選択を覚えておき、付けるときに戻す
+  let saved = null;
+  const saveSel = () => {
+    const sel = getSelection();
+    if (sel.rangeCount && ed.contains(sel.getRangeAt(0).commonAncestorContainer)) saved = sel.getRangeAt(0).cloneRange();
+  };
+  const restoreSel = () => {
+    if (!saved) return false;
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(saved);
+    return true;
+  };
+  const iconBtn = (cls, html, title, fn) => {
+    const b = h('button', `rich-btn ${cls}`);
     b.type = 'button';
+    b.innerHTML = html;
     b.title = title;
     b.onmousedown = (e) => {
-      e.preventDefault(); // テキストの欄の選択を保つ
-      document.execCommand('styleWithCSS', false, false);
-      document.execCommand(cmd);
-      commit();
-    };
-    bar.append(b);
-  }
-  // 選んだ部分の色：左の色の見本で色を選び、「色」で付ける。「色を外す」で文字全体の色に戻す
-  const pick = document.createElement('input');
-  pick.type = 'color';
-  pick.className = 'rich-color';
-  pick.value = S.lastTextColor || '#c00000';
-  pick.title = '選んだ部分に付ける色';
-  pick.onchange = () => (S.lastTextColor = pick.value);
-  const colorBtn = (label, title, value) => {
-    const b = h('button', 'rich-btn rich-txt');
-    b.type = 'button';
-    b.textContent = label;
-    b.title = title;
-    b.onmousedown = (e) => {
-      e.preventDefault(); // テキストの欄の選択を保つ
-      document.execCommand('styleWithCSS', false, true);
-      document.execCommand('foreColor', false, value());
-      document.execCommand('styleWithCSS', false, false);
-      commit();
+      e.preventDefault();
+      fn();
     };
     return b;
   };
-  // 色の 3 つは 1 つのまとまりにして、幅が足りなければ一緒に次の行へ回す
-  const grp = h('span', 'rich-group');
-  grp.append(pick, colorBtn('色', '選んだ部分を、左の色にする', () => pick.value), colorBtn('色を外す', '選んだ部分の色を外す（文字全体の色に戻す）', () => NO_COLOR));
-  bar.append(grp);
+  const exec = (cmd) => () => {
+    document.execCommand('styleWithCSS', false, false);
+    document.execCommand(cmd);
+    commit();
+  };
+  // ▾ のメニュー。開くと、テキストの欄の選択を覚えておく
+  const menus = [];
+  const dropMenu = (title, build) => {
+    const wrapM = h('span', 'rich-drop');
+    const menu = h('div', 'rich-menu');
+    menu.hidden = true;
+    const close = () => (menu.hidden = true);
+    const arrow = iconBtn('rich-arrow', '▾', title, () => {
+      const open = menu.hidden;
+      menus.forEach((m) => (m.hidden = true));
+      if (open) {
+        saveSel();
+        menu.innerHTML = '';
+        build(menu, close);
+        menu.hidden = false;
+      }
+    });
+    menus.push(menu);
+    wrapM.append(arrow, menu);
+    return wrapM;
+  };
+  const sep = () => h('span', 'rich-sep');
+
+  // 太字・斜体・下線・上付き・下付き
+  const grpFont = h('span', 'rich-group');
+  grpFont.append(
+    iconBtn('rich-bold', 'B', '太字', exec('bold')),
+    iconBtn('rich-italic', 'I', '斜体', exec('italic')),
+    iconBtn('rich-under', 'U', '下線（一重線）', () => applyUnderline({ type: 'single' })),
+    dropMenu('下線の種類', (menu, close) => {
+      const item = (label, u) => {
+        const b = iconBtn('rich-item', label, '', () => {
+          restoreSel();
+          applyUnderline(u);
+          close();
+        });
+        menu.append(b);
+      };
+      item('<u>一重線</u>', { type: 'single' });
+      item('<u class="ud">二重線</u>', { type: 'double' });
+      // 画像の線：画像と太さを選んで「画像の線を付ける」
+      const imgRow = h('div', 'rich-menu-row');
+      const opts = S.assets.map((a) => [a, a.split('/').pop()]);
+      const sel = selectEl(opts.length ? opts : [['', '（画像がありません）']], S.lastUnderImg || opts[0]?.[0] || '', (v) => (S.lastUnderImg = v));
+      const w = numEl(S.lastUnderW ?? 2, '', (v) => (S.lastUnderW = +v > 0 ? +v : 2), 0.5);
+      w.min = '0.5';
+      w.className = 'rich-w';
+      imgRow.append(h('span', null, '画像'), sel, h('span', null, '太さ'), w, h('span', null, 'pt'));
+      menu.append(h('div', 'rich-menu-label', '画像の線（画像を細長く伸ばして、文字の下に引く）'), imgRow);
+      const add = iconBtn('rich-item', '画像の線を付ける', '', () => {
+        if (!sel.value) return status('フォルダに画像がありません', true);
+        restoreSel();
+        applyUnderline({ type: 'img', img: sel.value, w: +w.value > 0 ? +w.value : 2 });
+        close();
+      });
+      menu.append(add);
+      item('下線なし', null);
+    }),
+    iconBtn('rich-sup', 'x<sup>2</sup>', '上付き', exec('superscript')),
+    iconBtn('rich-sub', 'x<sub>2</sub>', '下付き', exec('subscript')),
+  );
+
+  // 文字の色：「A」で、下の帯の色を付ける。▾ で色を選ぶ・色を外す
+  const curColor = () => S.lastTextColor || '#c00000';
+  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${curColor()}"></span>`, '選んだ部分に色を付ける', () => applyColor(curColor()));
+  const grpColor = h('span', 'rich-group');
+  grpColor.append(colorA, dropMenu('文字の色', (menu, close) => {
+    const pick = document.createElement('input');
+    pick.type = 'color';
+    pick.className = 'rich-color';
+    pick.value = curColor();
+    pick.onchange = () => {
+      S.lastTextColor = pick.value;
+      colorA.querySelector('.bar').style.background = pick.value;
+      restoreSel();
+      applyColor(pick.value);
+      close();
+    };
+    const row = h('div', 'rich-menu-row');
+    row.append(h('span', null, 'ほかの色'), pick);
+    menu.append(row, iconBtn('rich-item', '色を外す（文字全体の色に戻す）', '', () => {
+      restoreSel();
+      applyColor(NO_COLOR);
+      close();
+    }));
+  }));
+
+  // 箇条書き：カーソルのある段落（選んだ段落）の行頭に「•」を付ける。もう一度押すと外す
+  const bulletIcon = '<svg viewBox="0 0 20 16" width="20" height="16"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.6"/><circle cx="2.5" cy="8" r="1.6"/><circle cx="2.5" cy="13" r="1.6"/></g><g stroke="currentColor" stroke-width="1.6"><path d="M7 3h12M7 8h12M7 13h12"/></g></svg>';
+  const grpPara = h('span', 'rich-group');
+  grpPara.append(iconBtn('rich-bullet', bulletIcon, '箇条書き', () => toggleBullet()));
+
+  bar.append(grpFont, sep(), grpColor, sep(), grpPara);
+  // メニューの外を押したら閉じる（欄が画面から消えたら、この見張りも外す）
+  const outside = (e) => {
+    if (!wrap.isConnected) return document.removeEventListener('mousedown', outside);
+    if (!e.target.closest?.('.rich-drop')) menus.forEach((m) => (m.hidden = true));
+  };
+  document.addEventListener('mousedown', outside);
+
+  const applyColor = (value) => {
+    document.execCommand('styleWithCSS', false, true);
+    document.execCommand('foreColor', false, value);
+    document.execCommand('styleWithCSS', false, false);
+    commit();
+  };
+
+  // 選んだ範囲の段落（ed の直下の div）
+  const blocksIn = (r) => {
+    const out = [];
+    for (const d of ed.children) if (r.intersectsNode(d)) out.push(d);
+    if (!out.length) {
+      // カーソルが段落の外（ed の直下の文字）にあるときは、段落に包む
+      let n = r.startContainer;
+      while (n && n.parentNode !== ed) n = n.parentNode;
+      if (n && n !== ed) {
+        const d = document.createElement('div');
+        n.replaceWith(d);
+        d.append(n);
+        out.push(d);
+      }
+    }
+    return out;
+  };
+
+  // 下線を付ける（u が null なら外す）。選んだ範囲の、すでにある下線は付け替える
+  const applyUnderline = (u) => {
+    const sel = getSelection();
+    if (!sel.rangeCount) return;
+    const range = sel.getRangeAt(0);
+    if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return status('下線を付ける文字を選んでください', true);
+    for (const d of blocksIn(range)) {
+      const r = document.createRange();
+      r.selectNodeContents(d);
+      if (d.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
+      if (d.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
+      if (r.collapsed) continue;
+      const frag = r.extractContents();
+      for (const x of frag.querySelectorAll('u')) x.replaceWith(...x.childNodes);
+      if (u) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = underlineHTML(u, '', (src) => S.imageURLs.get(src) || '');
+        const el = tmp.firstChild;
+        el.append(frag);
+        r.insertNode(el);
+      } else r.insertNode(frag);
+    }
+    // 選択を外し、空になった下線を消す
+    for (const x of ed.querySelectorAll('u')) if (!x.textContent) x.remove();
+    sel.removeAllRanges();
+    commit();
+  };
+
+  const toggleBullet = () => {
+    const sel = getSelection();
+    if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).commonAncestorContainer)) {
+      // 欄にカーソルが無ければ、全部の段落に付ける（外す）
+      const all = [...ed.children];
+      const on = !all.every((d) => d.classList.contains('li'));
+      all.forEach((d) => d.classList.toggle('li', on));
+      return commit();
+    }
+    const ds = blocksIn(sel.getRangeAt(0));
+    const on = !ds.every((d) => d.classList.contains('li'));
+    ds.forEach((d) => d.classList.toggle('li', on));
+    commit();
+  };
   ed.onfocus = () => document.execCommand('defaultParagraphSeparator', false, 'div');
   // Shift+Enter：カーソルのある段落の中に ↵ と改行を差し込み、カーソルをその直後に置く
   const insertSoftBreak = () => {
@@ -2541,6 +2702,12 @@ function serializeRich(root) {
           continue;
         }
         const t = TAGS[c.nodeName];
+        // 下線：<u>（一重線）、<u class="ud">（二重線）、<u class="ui" data-img data-w>（画像の線）
+        if (c.nodeName === 'U') {
+          const open = c.classList.contains('ui') ? `<u img="${c.dataset.img}" w="${c.dataset.w || 2}">` : c.classList.contains('ud') ? '<u double>' : '<u>';
+          out += `${open}${inline(c)}</u>`;
+          continue;
+        }
         // 色：<span style="color:…">（入力欄で付けたもの）か <font color="…">
         const raw = c.nodeName === 'FONT' ? c.getAttribute('color') : c.style?.color;
         const col = raw ? toHex6(raw) : null;
@@ -2560,7 +2727,7 @@ function serializeRich(root) {
     if (c.nodeType === 1 && (c.nodeName === 'DIV' || c.nodeName === 'P')) {
       if (pending !== null) paras.push(pending);
       pending = null;
-      paras.push(inline(c));
+      paras.push((c.classList.contains('li') ? '<li>' : '') + inline(c));
     } else {
       pending = (pending ?? '') + inline({ childNodes: [c] });
     }
@@ -2568,6 +2735,7 @@ function serializeRich(root) {
   if (pending !== null) paras.push(pending);
   return paras.join('\n')
     .replace(/<(b|i|sup|sub)><\/\1>/g, '')
+    .replace(/<u[^>]*><\/u>/g, '')
     .replace(/<color #[0-9A-F]{6}><\/color>/g, '')
     // 隣り合う同じ色はまとめる
     .replace(/<color (#[0-9A-F]{6})>((?:(?!<\/?color)[\s\S])*)<\/color><color \1>/g, '<color $1>$2');
@@ -3007,7 +3175,8 @@ async function exportPPTX() {
   if (!S.layout) return;
   try {
     status('PPTX を作成中…');
-    const pres = await buildPPTX(window.PptxGenJS, S.layout, async (src) => ({ data: await blobToDataURL(await S.source.readBlob(src)) }));
+    const underlines = await measureAllUnderlines();
+    const pres = await buildPPTX(window.PptxGenJS, S.layout, async (src) => ({ data: await blobToDataURL(await S.source.readBlob(src)) }), { underlines });
     const blob = await finishPPTX(pres, window.JSZip, 'blob');
     const name = `${S.source.name}.pptx`;
     if (S.source.writable) {
@@ -3019,6 +3188,24 @@ async function exportPPTX() {
     }
   } catch (e) {
     status(`PPTX を作れません: ${e.message}`, true);
+  }
+}
+
+// 画像の線（<u img=…>）の位置を、隠した画面に全部のスライドを描いて測る（PPTX に画像として置くため）
+async function measureAllUnderlines() {
+  if (!hasImageUnderline(S.layout)) return [];
+  const f = document.createElement('iframe');
+  f.style.cssText = 'position:fixed;left:-30000px;top:0;width:3000px;height:2000px;border:0;visibility:hidden';
+  document.body.append(f);
+  try {
+    await new Promise((res) => {
+      f.onload = res;
+      f.srcdoc = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true });
+    });
+    await loadUsedFonts(f.contentDocument);
+    return measureUnderlines(f.contentDocument, S.layout.width);
+  } finally {
+    f.remove();
   }
 }
 

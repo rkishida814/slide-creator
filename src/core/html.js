@@ -1,5 +1,5 @@
 // 配置結果 → HTML。PDF/PNG 出力（Chrome）とブラウザ版の表示で共用する。
-import { richToHTML, paragraphs } from './richtext.js';
+import { richToHTML, paragraphs, isBullet } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
 // フォントは、英数字（英語）用と日本語用を別々に選ぶ（font.family と font.family_ja）。
@@ -119,6 +119,12 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .txt { display: flex; flex-direction: column; overflow: visible; }
 .txt > div { white-space: pre-wrap; overflow-wrap: anywhere; }
 .txt .j { font-family: var(--ja); }
+/* 箇条書き：行頭に「•」。折り返した行は文字の頭に揃える */
+.pa.li { position: relative; padding-left: 1.1em; }
+.pa.li::before { content: '\\2022'; position: absolute; left: 0.1em; }
+/* 下線：二重線と、画像の線（画像を文字の下に、縦横比を保たずに伸ばして敷く） */
+u.ud { text-decoration-style: double; }
+u.ui { text-decoration: none; background-repeat: no-repeat; background-position: 0 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .missing { background: repeating-linear-gradient(45deg, #fdd, #fdd 10px, #fff 10px, #fff 20px); }
 .ol { border: 1px dashed rgba(220, 0, 80, .8); pointer-events: none; }
 .ol span { position: absolute; left: 0; top: 0; background: rgba(220, 0, 80, .85); color: #fff; padding: 0 .3em; font-family: sans-serif; line-height: 1.3; }
@@ -166,9 +172,35 @@ function renderElement(e, L, opts) {
       ...(glowOf(f) ? [`text-shadow:${glowCSS(glowOf(f))}`] : []),
     ].join(';');
     const paras = paragraphs(e.text)
-      .map((p, i) => `<div class="pa"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p)) || '<br>'}</div>`)
+      .map((p, i) => `<div class="pa${isBullet(p) ? ' li' : ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br>', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
       .join('');
     return `<div ${data} class="txt" style="${st}"><div>${paras}</div></div>`;
   }
   return '';
+}
+
+// 画像の線（<u img=…>）の位置を、描いた HTML から測る（PPTX では、測った位置に画像を置く）。
+// doc は renderHTML の HTML を拡大・縮小せずに開いた文書。width はキャンバスの幅（単位はキャンバスの単位）。
+// Chrome（puppeteer）の中でも動かすので、この関数の外のものを使わない
+export function measureUnderlines(doc, width) {
+  const out = [];
+  for (const sec of doc.querySelectorAll('section.slide')) {
+    const sr = sec.getBoundingClientRect();
+    const k = width / sr.width; // px → キャンバスの単位
+    const slide = sec.id.replace(/^slide-/, '');
+    for (const u of sec.querySelectorAll('u.ui')) {
+      const box = u.closest('[data-path]');
+      const th = ((parseFloat(u.dataset.w) || 2) * 96) / 72; // 太さ（pt → px）
+      for (const r of u.getClientRects()) {
+        if (r.width < 0.5) continue;
+        out.push({ slide, path: box ? box.dataset.path : '', src: u.dataset.img, rect: { x: (r.left - sr.left) * k, y: (r.bottom - sr.top - th) * k, w: r.width * k, h: th * k } });
+      }
+    }
+  }
+  return out;
+}
+
+// 文書の中に画像の線があるか（無ければ測らない）
+export function hasImageUnderline(layout) {
+  return layout.slides.some((s) => s.elements.some((e) => e.type === 'text' && /<u\s[^>]*img\s*=/i.test(String(e.text))));
 }
