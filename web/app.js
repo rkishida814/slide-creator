@@ -3886,29 +3886,73 @@ async function measureForPPTX() {
   }
 }
 
-// PDF は、ポスターだけを描いた新しいウィンドウを印刷して作る。
-// 画面の中の見えない枠（iframe）を印刷すると、Chrome が枠の用紙の指定（ポスターの大きさ・余白 0）を使わず、
-// 普通の用紙と余白で印刷し、余白に日付・題名・URL・ページ番号のヘッダーとフッターを入れていた。
-// 新しいウィンドウなら、用紙の指定がそのまま効く（余白が 0 なので、ヘッダーとフッターは入らない）
+// PDF は、このページそのものを印刷して作る。印刷のあいだだけ、アプリの画面を隠してポスターだけを出し、
+// 用紙をポスターの大きさ・余白 0 にする（余白が 0 なので、日付・題名・URL・ページ番号のヘッダーとフッターは入らない）。
+// 画面の中の見えない枠（iframe）を印刷すると、Chrome が枠の用紙の指定を使わず、普通の用紙と余白で印刷し、
+// ヘッダーとフッターを入れていた。新しいウィンドウを開く方法は、ポップアップとして止められることがある
+// 印刷のための、ポスターだけの部分（#print-root）と、印刷のときだけ効く書き方を、このページに足す。片付ける関数を返す
+function mountPrint() {
+  const html = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true });
+  const src = new DOMParser().parseFromString(html, 'text/html');
+  const posterCSS = [...src.querySelectorAll('style')].map((s) => s.textContent).join('\n');
+  // 印刷のときだけ効かせる（画面のアプリの見た目は変えない）。アプリの「* { box-sizing: border-box }」などを打ち消す
+  const style = document.createElement('style');
+  style.id = 'print-css';
+  style.textContent = `#print-root { display: none; }
+@media print {
+${posterCSS}
+html, body { height: auto !important; display: block !important; background: #fff !important; margin: 0 !important; padding: 0 !important; }
+body > *:not(#print-root) { display: none !important; }
+#print-root { display: block !important; }
+#print-root *:not(section.slide > div) { box-sizing: content-box; }
+}`;
+  // Google Fonts を使う文字があれば、その読み込みもこのページに足す
+  const links = [...src.querySelectorAll('link[rel=stylesheet]')].map((l) => {
+    const n = document.createElement('link');
+    n.rel = 'stylesheet';
+    n.href = l.href;
+    n.dataset.print = '1';
+    return n;
+  });
+  const root = document.createElement('div');
+  root.id = 'print-root';
+  root.innerHTML = src.body.innerHTML;
+  document.head.append(style, ...links);
+  document.body.append(root);
+  const title = document.title;
+  // PDF の名前の既定は、ページの題名になる
+  document.title = String(S.source?.name || 'slide');
+  S.printing = true;
+  const cleanup = () => {
+    root.remove();
+    style.remove();
+    for (const l of links) l.remove();
+    document.title = title;
+    S.printing = false;
+  };
+  return { root, links, cleanup };
+}
+
+// ブラウザの印刷（Ctrl+P・⌘P）で印刷するときも、アプリの画面ではなく、ポスターだけを余白 0 で印刷する
+window.addEventListener('beforeprint', () => {
+  if (S.printing || !S.layout) return;
+  const { cleanup } = mountPrint();
+  window.addEventListener('afterprint', cleanup, { once: true });
+});
+
 async function exportPDF() {
   if (!S.layout) return;
-  const w = window.open('', '_blank');
-  if (!w) return status('新しいウィンドウを開けません。このページのポップアップを許可してから、もう一度押してください。', true);
-  const name = String(S.source?.name || 'slide').replace(/[<>&"]/g, '');
-  const html = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true }).replace('<head>', `<head><title>${name}</title>`);
-  w.document.open();
-  w.document.write(html);
-  w.document.close();
+  const { root, links, cleanup } = mountPrint();
   status('印刷画面で「PDFに保存」を選んでください');
   try {
-    if (w.document.readyState !== 'complete') await new Promise((r) => w.addEventListener('load', r, { once: true }));
     // フォントと画像を読み込み終えてから印刷する（待たないと、日本語が別のフォントで PDF に入る）
-    await loadUsedFonts(w.document);
-    await Promise.all([...w.document.images].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
-    w.addEventListener('afterprint', () => w.close(), { once: true });
-    w.focus();
-    w.print();
+    await Promise.all(links.map((l) => new Promise((r) => { l.onload = l.onerror = r; })));
+    await loadUsedFonts(document);
+    await Promise.all([...root.querySelectorAll('img')].map((i) => (i.complete ? null : new Promise((r) => { i.onload = i.onerror = r; }))));
+    window.addEventListener('afterprint', cleanup, { once: true });
+    window.print();
   } catch (e) {
+    cleanup();
     status(`PDF を作れません: ${e.message}`, true);
   }
 }
