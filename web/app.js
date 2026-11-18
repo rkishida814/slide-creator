@@ -1324,46 +1324,64 @@ function fitLabels() {
   }
 }
 
-// 設定欄を作り直す。テキストの欄に文字を打っている最中なら、作り直した欄にカーソルを移し、同じ位置（先頭から何文字目か）に置く
-// （打った文字を書き込むと、文字の高さに合わせてボックスを直すために描き直すことがあり、そのたびに欄が作り直されて入力が止まるため。
+// 設定欄を作り直す。テキストの欄（とその大きさの欄）を使っている最中なら、作り直した欄に、選んでいた範囲（先頭から何文字目か）と
+// カーソルを写す（打った文字や大きさを書き込むと、ボックスを文字の高さに合わせるために描き直すことがあり、そのたびに欄が作り直されるため。
 //   ボックスを直すとボックスの場所が変わることがあるので、古い欄は戻さず、新しい欄に移る）
 function renderProps() {
   const act = document.activeElement;
-  const oldEd = act?.classList?.contains('rich') && $('#node').contains(act) ? act : null;
-  const sel = getSelection();
+  const oldWrap = act?.closest?.('.rich-wrap');
+  const inUse = oldWrap && $('#node').contains(oldWrap) ? oldWrap : null;
   let pos = null;
-  if (oldEd && sel.rangeCount && oldEd.contains(sel.getRangeAt(0).startContainer)) {
-    const r = sel.getRangeAt(0);
-    const off = (node, o) => {
-      const x = document.createRange();
-      x.setStart(oldEd, 0);
-      x.setEnd(node, o);
-      return x.toString().length;
-    };
-    pos = { start: off(r.startContainer, r.startOffset), end: off(r.endContainer, r.endOffset) };
+  let toSize = false;
+  if (inUse) {
+    const oldEd = inUse.querySelector('.rich');
+    toSize = act.classList.contains('rich-size');
+    const sel = getSelection();
+    const r = sel.rangeCount && oldEd.contains(sel.getRangeAt(0).startContainer) ? sel.getRangeAt(0) : inUse._getSaved?.();
+    if (r && oldEd.contains(r.startContainer) && oldEd.contains(r.endContainer)) {
+      const off = (node, o) => {
+        const x = document.createRange();
+        x.setStart(oldEd, 0);
+        x.setEnd(node, o);
+        return x.toString().length;
+      };
+      pos = { start: off(r.startContainer, r.startOffset), end: off(r.endContainer, r.endOffset) };
+    }
   }
   renderPropsInner();
-  if (!oldEd || oldEd.isConnected) return;
-  const ed = $('#node').querySelector('.rich');
-  if (!ed) return;
-  ed.focus();
-  if (!pos) return;
-  // 先頭から n 文字目の位置（文字の節と、その中の位置）
-  const at = (n) => {
+  if (!inUse || inUse.isConnected) return;
+  const nw = $('#node').querySelector('.rich-wrap');
+  if (!nw) return;
+  const ed = nw.querySelector('.rich');
+  // 先頭から n 文字目の位置（文字の節と、その中の位置）。節の境目では、範囲の始まりは次の節の頭に、終わりは前の節の末尾に置く
+  const at = (n, isStart) => {
     const w = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
     let last = null;
     for (let t = w.nextNode(); t; t = w.nextNode()) {
-      if (n <= t.nodeValue.length) return [t, n];
+      if (isStart ? n < t.nodeValue.length : n <= t.nodeValue.length) return [t, n];
       n -= t.nodeValue.length;
       last = t;
     }
     return last ? [last, last.nodeValue.length] : [ed, ed.childNodes.length];
   };
-  const r = document.createRange();
-  r.setStart(...at(pos.start));
-  r.setEnd(...at(pos.end));
-  sel.removeAllRanges();
-  sel.addRange(r);
+  let r = null;
+  if (pos) {
+    r = document.createRange();
+    r.setStart(...at(pos.start, pos.start < pos.end));
+    r.setEnd(...at(pos.end, false));
+  }
+  if (toSize) {
+    // 大きさの欄を使っていたら、その欄にカーソルを戻し、選んでいた範囲を覚えさせる
+    nw._setSaved?.(r);
+    nw.querySelector('.rich-size')?.focus();
+    return;
+  }
+  ed.focus();
+  if (r) {
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(r);
+  }
 }
 
 function renderPropsInner() {
@@ -2358,7 +2376,7 @@ function textFields(box, node, inh) {
   const f = node.font || {};
   const fi = inh.font || {};
   fs.append(
-    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), { base: f.size ?? fi.size ?? DEFAULT_SIZE, path: box.path }, (v) => {
+    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), { base: f.size ?? fi.size ?? DEFAULT_SIZE, path: box.path, onBaseSize: (n) => edit(box, ['font', 'size'], n) }, (v) => {
       S.keepPanel = box.path;
       const off = box.src.mode === 'direct' ? undefined : false;
       const pairs = [['text', v]];
@@ -2374,7 +2392,6 @@ function textFields(box, node, inh) {
       }
       return unfitTextBelow(box);
     })),
-    row('大きさ', h2(numEl(f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, ['font', 'size'], +v)), 'pt')),
     row('フォント（英語）', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
     row('フォント（日本語）', selectEl(JA_FONT_OPTS, f.family_ja ?? fi.family_ja ?? DEFAULT_FONT_JA, (v) => edit(box, ['font', 'family_ja'], v))),
     row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
@@ -2524,36 +2541,47 @@ function richEditor(value, opts, onCommit) {
   const sep = () => h('span', 'rich-sep');
 
   // 太字・斜体・下線・上付き・下付き
-  // 文字の大きさの欄（PowerPoint のフォントサイズの欄）。選んだ部分の大きさを出し、変えると選んだ部分だけを変える
+  // 文字の大きさの欄（PowerPoint のフォントサイズの欄）。文字を選んでいれば、その部分の大きさを出して、その部分だけを変える。
+  // 選んでいなければ（カーソルだけ・欄の外）、ボックス全体の文字の大きさを変える
   const sizeIn = document.createElement('input');
   sizeIn.type = 'number';
   sizeIn.min = '1';
   sizeIn.step = '1';
   sizeIn.className = 'rich-size';
-  sizeIn.title = '選んだ部分の文字の大きさ（pt）';
+  sizeIn.title = '文字の大きさ（pt）。文字を選んでいれば、その部分だけを変える';
   sizeIn.value = String(base);
-  sizeIn.onmousedown = saveSel;
-  sizeIn.onfocus = saveSel;
   sizeIn.onchange = () => {
     const n = +sizeIn.value;
     if (!(n > 0)) return;
-    restoreSel();
-    applySize(n);
-    saveSel();
+    if (saved && !saved.collapsed && ed.contains(saved.commonAncestorContainer)) {
+      restoreSel();
+      applySize(n);
+      saveSel();
+      sizeIn.focus(); // 続けて数字を変えられるように、大きさの欄にカーソルを戻す
+    } else if (opts.onBaseSize) opts.onBaseSize(n);
   };
-  const sizeOf = () => {
-    const sel = getSelection();
-    if (!sel.rangeCount) return;
-    const n = sel.getRangeAt(0).startContainer;
-    if (!ed.contains(n)) return;
+  // 範囲 r の始まりの文字の大きさ
+  const sizeAt = (r) => {
+    const n = r?.startContainer;
+    if (!n || !ed.contains(n)) return base;
     const sp = (n.nodeType === 1 ? n : n.parentElement)?.closest('span.fs');
-    if (document.activeElement !== sizeIn) sizeIn.value = String(sp && ed.contains(sp) ? +sp.dataset.size : base);
+    return sp && ed.contains(sp) ? +sp.dataset.size : base;
   };
+  // テキストの欄で選んだ範囲を覚えておき（大きさの欄を押すと欄の選択が外れるため）、大きさの欄にその大きさを出す
   const onSel = () => {
     if (!wrap.isConnected) return document.removeEventListener('selectionchange', onSel);
-    sizeOf();
+    const sel = getSelection();
+    if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer)) return;
+    saved = sel.getRangeAt(0).cloneRange();
+    if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
   };
   document.addEventListener('selectionchange', onSel);
+  // 設定欄を作り直したとき（renderProps）に、選んでいた範囲を新しい欄へ写すための口
+  wrap._getSaved = () => saved;
+  wrap._setSaved = (r) => {
+    saved = r;
+    sizeIn.value = String(sizeAt(r));
+  };
   const grpSize = h('span', 'rich-group');
   grpSize.append(sizeIn, h('span', 'rich-unit', 'pt'));
 
