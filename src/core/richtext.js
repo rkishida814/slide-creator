@@ -92,7 +92,7 @@ export function underlineHTML(u, inner, srcURL = (x) => x) {
   if (u.type === 'double') return `<u class="ud">${inner}</u>`;
   if (u.type === 'img') {
     const url = String(srcURL(u.img) || '').replace(/'/g, '%27');
-    return `<u class="ui" data-img="${esc(u.img)}" data-w="${u.w}" style="background-image:url('${esc(url)}');background-size:100% ${u.w}pt;padding-bottom:${u.w}pt">${inner}</u>`;
+    return `<u class="ui" data-img="${esc(u.img)}" data-w="${u.w}" style="text-decoration:none;background-image:url('${esc(url)}');background-repeat:no-repeat;background-position:0 100%;background-size:100% ${u.w}pt;padding-bottom:${u.w}pt">${inner}</u>`;
   }
   return `<u>${inner}</u>`;
 }

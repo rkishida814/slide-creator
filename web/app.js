@@ -2479,35 +2479,46 @@ function richEditor(value, onCommit) {
   grpFont.append(
     iconBtn('rich-bold', 'B', '太字', exec('bold')),
     iconBtn('rich-italic', 'I', '斜体', exec('italic')),
-    iconBtn('rich-under', 'U', '下線（一重線）', () => applyUnderline({ type: 'single' })),
+    // U：選んだ部分に一重線を付ける。選んだ部分がすでに全部下線なら外す
+    iconBtn('rich-under', 'U', '下線（もう一度押すと外す）', () => applyUnderline(allUnderlined() ? null : { type: 'single' })),
     dropMenu('下線の種類', (menu, close) => {
-      const item = (label, u) => {
-        const b = iconBtn('rich-item', label, '', () => {
-          restoreSel();
-          applyUnderline(u);
-          close();
-        });
-        menu.append(b);
+      const pickU = (u) => {
+        restoreSel();
+        applyUnderline(u);
+        close();
       };
+      const item = (html, u) => menu.append(iconBtn('rich-item', html, '', () => pickU(u)));
       item('<u>一重線</u>', { type: 'single' });
       item('<u class="ud">二重線</u>', { type: 'double' });
-      // 画像の線：画像と太さを選んで「画像の線を付ける」
-      const imgRow = h('div', 'rich-menu-row');
-      const opts = S.assets.map((a) => [a, a.split('/').pop()]);
-      const sel = selectEl(opts.length ? opts : [['', '（画像がありません）']], S.lastUnderImg || opts[0]?.[0] || '', (v) => (S.lastUnderImg = v));
+      // 画像の線：太さを決めてから、画像をクリックする（画像を縦横比を保たずに細長く伸ばして、文字の下に引く）
+      menu.append(h('div', 'rich-menu-label', '画像の線'));
+      const wRow = h('div', 'rich-menu-row');
       const w = numEl(S.lastUnderW ?? 2, '', (v) => (S.lastUnderW = +v > 0 ? +v : 2), 0.5);
       w.min = '0.5';
       w.className = 'rich-w';
-      imgRow.append(h('span', null, '画像'), sel, h('span', null, '太さ'), w, h('span', null, 'pt'));
-      menu.append(h('div', 'rich-menu-label', '画像の線（画像を細長く伸ばして、文字の下に引く）'), imgRow);
-      const add = iconBtn('rich-item', '画像の線を付ける', '', () => {
-        if (!sel.value) return status('フォルダに画像がありません', true);
-        restoreSel();
-        applyUnderline({ type: 'img', img: sel.value, w: +w.value > 0 ? +w.value : 2 });
-        close();
+      w.oninput = () => (S.lastUnderW = +w.value > 0 ? +w.value : 2);
+      wRow.append(h('span', null, '太さ'), w, h('span', null, 'pt'));
+      menu.append(wRow);
+      const list = h('div', 'rich-imgs');
+      list.append(h('div', 'note', '画像を読み込んでいます…'));
+      menu.append(list);
+      // フォルダの画像を読み込み、横長の画像（幅が高さの 4 倍以上）を先に並べる
+      Promise.all(S.assets.map(loadImage)).then(() => {
+        const ar = (a) => {
+          const z = S.imageSizes.get(a);
+          return z ? z.w / z.h : 0;
+        };
+        const imgs = [...new Set(S.assets)].filter((a) => S.imageURLs.get(a)).sort((x, y) => (ar(y) >= 4) - (ar(x) >= 4));
+        list.innerHTML = '';
+        if (!imgs.length) list.append(h('div', 'note', 'フォルダに画像がありません'));
+        for (const a of imgs) {
+          const b = iconBtn('rich-item rich-img', '', a, () => pickU({ type: 'img', img: a, w: S.lastUnderW ?? 2 }));
+          const line = h('span', 'line');
+          line.style.backgroundImage = `url('${S.imageURLs.get(a)}')`;
+          b.append(line, h('span', 'name', a.split('/').pop()));
+          list.append(b);
+        }
       });
-      menu.append(add);
-      item('下線なし', null);
     }),
     iconBtn('rich-sup', 'x<sup>2</sup>', '上付き', exec('superscript')),
     iconBtn('rich-sub', 'x<sub>2</sub>', '下付き', exec('subscript')),
@@ -2576,6 +2587,22 @@ function richEditor(value, onCommit) {
     return out;
   };
 
+  // 選んだ部分の文字が、全部下線の中にあるか
+  const allUnderlined = () => {
+    const sel = getSelection();
+    if (!sel.rangeCount) return false;
+    const r = sel.getRangeAt(0);
+    if (r.collapsed || !ed.contains(r.commonAncestorContainer)) return false;
+    const w = document.createTreeWalker(r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentNode, NodeFilter.SHOW_TEXT);
+    let any = false;
+    for (let n = w.nextNode(); n; n = w.nextNode()) {
+      if (!r.intersectsNode(n) || !n.nodeValue.replace(/\u200b/g, '')) continue;
+      any = true;
+      if (!n.parentElement.closest('u')) return false;
+    }
+    return any;
+  };
+
   // 下線を付ける（u が null なら外す）。選んだ範囲の、すでにある下線は付け替える
   const applyUnderline = (u) => {
     const sel = getSelection();
@@ -2590,13 +2617,29 @@ function richEditor(value, onCommit) {
       if (r.collapsed) continue;
       const frag = r.extractContents();
       for (const x of frag.querySelectorAll('u')) x.replaceWith(...x.childNodes);
+      let el;
       if (u) {
         const tmp = document.createElement('div');
         tmp.innerHTML = underlineHTML(u, '', (src) => S.imageURLs.get(src) || '');
-        const el = tmp.firstChild;
-        el.append(frag);
-        r.insertNode(el);
-      } else r.insertNode(frag);
+        el = tmp.firstChild;
+      } else el = document.createElement('span');
+      el.append(frag);
+      r.insertNode(el);
+      // 外側にある下線から出す（下線の中の一部を選んだときは、その前後に下線を残す）
+      for (let o = el.parentElement?.closest('u'); o && ed.contains(o); o = el.parentElement?.closest('u')) {
+        const rb = document.createRange();
+        rb.setStart(o, 0);
+        rb.setEndBefore(el);
+        const before = o.cloneNode(false);
+        before.append(rb.extractContents());
+        const ra = document.createRange();
+        ra.setStartAfter(el);
+        ra.setEnd(o, o.childNodes.length);
+        const after = o.cloneNode(false);
+        after.append(ra.extractContents());
+        o.replaceWith(before, ...o.childNodes, after);
+      }
+      if (!u) el.replaceWith(...el.childNodes);
     }
     // 選択を外し、空になった下線を消す
     for (const x of ed.querySelectorAll('u')) if (!x.textContent) x.remove();

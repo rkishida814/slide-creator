@@ -191,9 +191,11 @@ export function measureUnderlines(doc, width) {
     for (const u of sec.querySelectorAll('u.ui')) {
       const box = u.closest('[data-path]');
       const th = ((parseFloat(u.dataset.w) || 2) * 96) / 72; // 太さ（pt → px）
+      // PowerPoint では文字が画面より少し下に描かれ、画面と同じ位置だと線が文字に重なる。
+      // そのため PPTX では、画面の線の位置から太さの分だけ下げて置く
       for (const r of u.getClientRects()) {
         if (r.width < 0.5) continue;
-        out.push({ slide, path: box ? box.dataset.path : '', src: u.dataset.img, rect: { x: (r.left - sr.left) * k, y: (r.bottom - sr.top - th) * k, w: r.width * k, h: th * k } });
+        out.push({ slide, path: box ? box.dataset.path : '', src: u.dataset.img, rect: { x: (r.left - sr.left) * k, y: (r.bottom - sr.top) * k, w: r.width * k, h: th * k } });
       }
     }
   }
