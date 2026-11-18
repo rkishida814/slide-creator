@@ -97,8 +97,7 @@ export function renderHTML(layout, opts = {}) {
     .map((s) => {
       const els = s.elements.map((e) => renderElement(e, L, opts)).join('\n');
       const outline = opts.outline
-        ? s.boxes
-            .filter((b) => b.depth > 0)
+        ? (opts.outlineBoxes || s.boxes.filter((b) => b.depth > 0))
             .map((b) => {
               return `<div class="ol" style="${pos(b.rect, L)}"></div>`;
             })
@@ -151,7 +150,7 @@ function renderElement(e, L, opts) {
     const fw = e.rect.w / (r - l); // 切り抜く前の画像全体を表示した場合の大きさ
     const fh = e.rect.h / (b - t);
     const url = opts.srcURL ? opts.srcURL(e.src) : e.src;
-    return `<div ${data} class="img" style="${pos(e.rect, L)}"><img src="${esc(url)}" style="left:${L(-l * fw)};top:${L(-t * fh)};width:${L(fw)};height:${L(fh)}"></div>`;
+    return `<div ${data} class="img${e.background ? ' bg' : ''}" style="${pos(e.rect, L)}"><img src="${esc(url)}" style="left:${L(-l * fw)};top:${L(-t * fh)};width:${L(fw)};height:${L(fh)}"></div>`;
   }
   if (e.type === 'text') {
     const f = e.font;

@@ -27,6 +27,14 @@ export function defaultPadding(kind) {
   return kind === 'text' || kind === 'empty' ? TEXT_PADDING : null;
 }
 
+// 背景の値が「背景を分けた木」かどうか。
+// 背景は "#RRGGBB"（色）、{ image, mode, tile, color }（1 つの背景）、または
+// ボックスと同じ形の木（{ split, ratio, children } と、葉の { background: 背景 }）。
+// 画面の「背景を編集」で作る。中身のボックスの分割とは別に分ける
+export function isBgTree(bg) {
+  return !!bg && typeof bg === 'object' && !Array.isArray(bg) && bg.image == null && bg.color == null && bg.mode == null && bg.tile == null;
+}
+
 // padding: 数値 / [上下, 左右] / [上, 右, 下, 左]
 export function parseBox(value, unit) {
   if (value == null) return { t: 0, r: 0, b: 0, l: 0 };

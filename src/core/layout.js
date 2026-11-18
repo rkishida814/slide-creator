@@ -1,7 +1,7 @@
 // 配置の計算。layout.yaml（テンプレート展開済み）を受け取り、各ノードの枠と、
 // 描く要素（rect / image / text）の絶対座標をキャンバスの単位で返す。
 // ファイルやブラウザに依存しない（ブラウザ版でもそのまま使う）。
-import { assertUnit, toUnit, parseBox, defaultPadding } from './units.js';
+import { assertUnit, toUnit, parseBox, defaultPadding, isBgTree } from './units.js';
 
 // 親から子へ引き継ぐ設定
 const INHERIT = ['align', 'valign', 'fit', 'font', 'line_height', 'para_space'];
@@ -39,11 +39,11 @@ export function layoutDoc(doc, env) {
   }
   const slides = (doc.slides || []).map((slide, i) => {
     const id = slide.id || `s${i + 1}`;
-    const ctx = { unit, minDpi, env, boxes: [], elements: [], issues: [], ids: new Set(), slideId: id };
+    const ctx = { unit, minDpi, env, boxes: [], bgBoxes: {}, elements: [], issues: [], ids: new Set(), slideId: id };
     const inh = pickInherit(doc.defaults || {}, {});
     pushBackground(slide.background ?? doc.background, { x: 0, y: 0, w: W, h: H }, id, ctx);
     walk(slide.root, { x: 0, y: 0, w: W, h: H }, inh, `${id}`, ctx, 0, null);
-    return { id, rect: { x: 0, y: 0, w: W, h: H }, boxes: ctx.boxes, elements: ctx.elements, issues: ctx.issues };
+    return { id, rect: { x: 0, y: 0, w: W, h: H }, boxes: ctx.boxes, bgBoxes: ctx.bgBoxes, elements: ctx.elements, issues: ctx.issues };
   });
   const ids = slides.map((s) => s.id);
   const dup = ids.filter((x, i) => ids.indexOf(x) !== i);
@@ -75,11 +75,13 @@ function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
   const style = pickInherit(node, inherited);
   // 画面の設定欄で使う（JSON には出さない）
   Object.defineProperties(box, { node: { value: node }, inherited: { value: inherited }, style: { value: style } });
-  const pad = parseBox(node.padding ?? defaultPadding(kind), ctx.unit);
+  // 背景を分けた木の中は、決まった余白を付けない（隙間なく敷く）
+  const pad = parseBox(node.padding ?? (ctx.bg ? null : defaultPadding(kind)), ctx.unit);
   const inner = { x: rect.x + pad.l, y: rect.y + pad.t, w: rect.w - pad.l - pad.r, h: rect.h - pad.t - pad.b };
   // background_inset: true なら、背景と枠線も余白の分だけ内側に縮める
   const bgRect = node.background_inset && inner.w > 0 && inner.h > 0 ? inner : rect;
-  pushBackground(node.background, bgRect, path, ctx);
+  if (isBgTree(node.background)) layoutBgTree(node.background, bgRect, path, ctx);
+  else pushBackground(node.background, bgRect, path, ctx);
   if (node.border) ctx.elements.push({ type: 'rect', path, rect: bgRect, fill: null, border: node.border });
   if (inner.w <= 0 || inner.h <= 0) {
     ctx.issues.push({ level: 'error', path, msg: 'padding が大きすぎて中身の領域が無い' });
@@ -196,9 +198,19 @@ function layoutImage(node, rect, style, path, ctx) {
   ctx.elements.push({ type: 'image', path, src, rect: disp, cell: rect, crop: [l, t, r, b], natural: nat, dpi: Math.round(dpi) });
 }
 
+// 背景を分けた木。ボックスと同じ配置の計算で、背景だけを描く。
+// 分けた枠は slide.bgBoxes[ボックスの path] に入れる（画面の「背景を編集」で選ぶ枠）。中身のボックスの一覧には入れない
+function layoutBgTree(tree, rect, host, ctx) {
+  const sub = { ...ctx, boxes: [], bg: true };
+  walk(tree, rect, {}, `${host}/bg`, sub, 0, null);
+  ctx.bgBoxes[host] = sub.boxes;
+}
+
 // 背景。色だけなら "#RRGGBB"。画像を使うときは
-//   { image: 画像のファイル, mode: tile（並べる・既定）| cover（広げる）, tile: 模様 1 つの幅, color: 下地の色 }
-// tile を省くと、画像を 96 dpi として測った幅にする
+//   { image: 画像のファイル, mode: stretch | cover | tile, tile: 模様 1 つの幅, color: 下地の色 }
+//   mode: stretch（既定）… 縦横比を変えて、ボックスいっぱいに広げる。並べない
+//         cover … 縦横比を保ってボックスいっぱいに広げ、はみ出しを中央から切る
+//         tile  … 画像を並べて敷く。tile を省くと、画像を 96 dpi として測った幅にする
 function pushBackground(bg, rect, path, ctx) {
   if (!bg) return;
   if (typeof bg !== 'object') {
@@ -212,20 +224,27 @@ function pushBackground(bg, rect, path, ctx) {
     ctx.issues.push({ level: 'error', path, msg: `背景の画像が読めない: ${bg.image}` });
     return;
   }
-  if (bg.mode === 'cover') {
-    // 枠いっぱいに広げ、はみ出しを中央から切る
-    const ia = nat.w / nat.h;
-    const ba = rect.w / rect.h;
+  const mode = bg.mode || 'stretch';
+  if (mode === 'stretch' || mode === 'cover') {
     let crop = [0, 0, 1, 1];
-    if (ia > ba) {
-      const keep = ba / ia;
-      crop = [(1 - keep) / 2, 0, (1 + keep) / 2, 1];
-    } else {
-      const keep = ia / ba;
-      crop = [0, (1 - keep) / 2, 1, (1 + keep) / 2];
+    if (mode === 'cover') {
+      // 枠いっぱいに広げ、はみ出しを中央から切る
+      const ia = nat.w / nat.h;
+      const ba = rect.w / rect.h;
+      if (ia > ba) {
+        const keep = ba / ia;
+        crop = [(1 - keep) / 2, 0, (1 + keep) / 2, 1];
+      } else {
+        const keep = ia / ba;
+        crop = [0, (1 - keep) / 2, 1, (1 + keep) / 2];
+      }
     }
-    const dpi = ((crop[2] - crop[0]) * nat.w) / (rect.w / perInch(ctx.unit));
+    const dpi = Math.min(((crop[2] - crop[0]) * nat.w) / (rect.w / perInch(ctx.unit)), ((crop[3] - crop[1]) * nat.h) / (rect.h / perInch(ctx.unit)));
     ctx.elements.push({ type: 'image', path, src: bg.image, rect, cell: rect, crop, natural: nat, dpi: Math.round(dpi), background: true });
+    return;
+  }
+  if (mode !== 'tile') {
+    ctx.issues.push({ level: 'error', path, msg: `背景の mode は stretch / cover / tile（"${mode}"）` });
     return;
   }
   const tileW = bg.tile != null ? toUnit(bg.tile, ctx.unit) : (nat.w / 96) * perInch(ctx.unit);

@@ -1,7 +1,7 @@
 // 別に作ったレイアウトの 1 枚を、ボックスの中身として取り込む（ボックスの木を写す）。
 // 取り込んだ後は、この文書の普通のボックスになる（分割・比率・文字などをこの文書の中で直す。元のファイルとはつながらない）。
 // ファイルに依存しない。Node・ブラウザの両方から使う。
-import { toUnit, convert } from './units.js';
+import { toUnit, convert, isBgTree } from './units.js';
 
 // "a/b" + "../c.png" → "a/c.png"（区切りは /）
 export function joinPath(dir, file) {
@@ -68,6 +68,7 @@ export function importLayout(sub, opts) {
   };
   const bgOf = (bg) => {
     if (!bg || typeof bg !== 'object') return bg;
+    if (isBgTree(bg)) return conv(bg); // 背景を分けた木は、ボックスと同じように写す
     const o = { ...bg };
     if (o.image) o.image = joinPath(opts.dir, o.image);
     if (o.tile != null) o.tile = len(o.tile);

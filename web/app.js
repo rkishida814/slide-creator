@@ -4,7 +4,7 @@ import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, loadUsedFonts, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
 import { richToHTML, paragraphs } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
-import { PER_INCH, toUnit, defaultPadding, parseBox } from '../src/core/units.js';
+import { PER_INCH, toUnit, defaultPadding, parseBox, isBgTree } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
@@ -30,6 +30,7 @@ const S = {
   importFor: null, // 「レイアウトを取り込む」の欄を開いているボックスの path
   overflow: [],
   view: null,
+  bgEdit: null, // 背景を編集しているボックスの path（このあいだ、プレビューで選ぶのは背景の枠）
 };
 
 // ---------------------------------------------------------------- 読み込み
@@ -79,6 +80,7 @@ function collectImages(node, out) {
   if (!node || typeof node !== 'object') return;
   if (node.image != null) out.add(String(node.image));
   if (node.background?.image) out.add(String(node.background.image));
+  if (isBgTree(node.background)) collectImages(node.background, out);
   if (node.icon) out.add(String(node.icon));
   (node.children || []).forEach((c) => collectImages(c, out));
   (node.items || []).forEach((c) => collectImages(c, out));
@@ -125,6 +127,7 @@ async function rebuild() {
     S.error = e.message;
   }
   if (S.layout && !S.layout.slides.find((s) => s.id === S.slideId)) S.slideId = S.layout.slides[0]?.id || null;
+  if (S.bgEdit && !realSlide()?.bgBoxes?.[S.bgEdit]) S.bgEdit = null;
   if ((S.sel || []).some((x) => !findBox(x))) setSel([]);
   status(S.error || '', !!S.error);
   renderSlideTabs();
@@ -135,8 +138,15 @@ async function rebuild() {
 
 // ---------------------------------------------------------------- 表示
 
-function curSlide() {
+function realSlide() {
   return S.layout?.slides.find((s) => s.id === S.slideId) || null;
+}
+
+// いま選べる枠の一覧を持つスライド。背景の編集中は、そのボックスの背景を分けた枠だけを選べる
+function curSlide() {
+  const s = realSlide();
+  if (!s || !S.bgEdit) return s;
+  return { ...s, boxes: s.bgBoxes?.[S.bgEdit] || [] };
 }
 
 function findBox(path) {
@@ -151,6 +161,7 @@ function renderSlideTabs() {
   if (!slides.length) return;
   const sel = selectEl(slides.map((s, i) => [s.id, `${i + 1}ページ`]), S.slideId, (v) => {
     S.slideId = v;
+    S.bgEdit = null;
     setSel([]);
     setZoom(1);
     renderPreview();
@@ -162,6 +173,7 @@ function renderSlideTabs() {
 
 const FRAME_CSS = `
 html { background: #dfe3e8; }
+body.bgedit .txt, body.bgedit .img:not(.bg) { opacity: .25; }
 body { background: transparent !important; overflow: auto; margin: 0; }
 .zoom-space { position: absolute; left: 0; top: 0; pointer-events: none; }
 section.slide { position: absolute; left: 0; top: 0; box-shadow: 0 1px 6px rgba(0,0,0,.25); }
@@ -180,7 +192,8 @@ function renderPreview() {
   }
   const html = renderHTML(S.layout, {
     slides: [slide.id],
-    outline: S.outline,
+    outline: S.outline || !!S.bgEdit,
+    outlineBoxes: S.bgEdit ? curSlide().boxes : undefined,
     srcURL: (src) => S.imageURLs.get(src) || '',
   }).replace('</style>', `${FRAME_CSS}</style>`);
   frame.onload = setupFrame;
@@ -212,6 +225,7 @@ function setupFrame() {
   const sec = doc?.querySelector('section.slide');
   if (!sec) return;
   sec.style.transform = 'none';
+  doc.body.classList.toggle('bgedit', !!S.bgEdit);
   S.ppu = sec.getBoundingClientRect().width / S.layout.width; // キャンバスの単位あたりの px
   for (const cls of ['hov', 'sel', 'drop']) {
     const d = doc.createElement('div');
@@ -733,6 +747,13 @@ const MOVE_TO_CHILD = ['padding', 'background_inset'];
 function splitBox(box, dir, n) {
   const { file, path, mode } = box.src;
   const doc = S.files[file].doc;
+  if (S.bgEdit) {
+    // 背景の枠を分けるときは、分けた枠のそれぞれに同じ背景を写す（見た目は変わらず、あとで 1 つずつ変えられる）
+    const bg = plain((box.node || {}).background);
+    const children = Array.from({ length: n }, () => (bg != null ? { background: structuredClone(bg) } : {}));
+    replaceNode(doc, path, { split: dir, children });
+    return fileChanged(file);
+  }
   let pn = plain(box.node || {});
   if (typeof pn === 'string') pn = { text: pn };
   const content = Object.fromEntries(Object.entries(pn || {}).filter(([k]) => !FRAME_KEYS.includes(k) && !MOVE_TO_CHILD.includes(k)));
@@ -1167,7 +1188,7 @@ function mergeSelection() {
   const leaves = (S.sel || []).map(findBox).filter(Boolean).sort((a, b) => order(a) - order(b));
   const filled = leaves.filter((b) => b.kind === 'image' || b.kind === 'text');
   if (filled.length > 1 && !S.confirmed && !confirm('内容は、選んだ中でいちばん上か左にあるボックスのものだけを残し、ほかは消します。まとめますか？')) return;
-  let node = filled.length ? writtenNode(filled[0]) : {};
+  let node = filled.length ? writtenNode(filled[0]) : S.bgEdit && leaves.length ? writtenNode(leaves[0]) : {};
   if (typeof node === 'string') node = { text: node };
   delete node.id;
   const lca = u.kind === 'range' ? u.lca : u.box;
@@ -1290,6 +1311,7 @@ function renderProps() {
   const el = $('#node');
   el.innerHTML = '';
   if (!S.layout) return;
+  if (S.bgEdit) return renderBgProps(el);
   if ((S.sel || []).length > 1) return renderMulti(el);
   const box = S.selected ? findBox(S.selected) : null;
   el.append(h('h2', null, '選択中のボックス'));
@@ -1332,7 +1354,10 @@ function renderProps() {
   const fsBox = fieldset('余白・背景・枠線');
   fsBox.append(
     paddingRow(box, node),
-    ...bgRows(node.background, (v) => edit(box, 'background', v)),
+    ...(isBgTree(node.background)
+      ? [row('背景', h('span', 'note', '分けて設定している（「背景を編集」で変える）'))]
+      : bgRows(node.background, (v) => edit(box, 'background', v))),
+    row('', bgEditBtn(box)),
     row('枠線', h2(
       numEl(node.border?.width ?? 0, '', (v) => edit(box, 'border', +v > 0 ? { width: +v, color: node.border?.color || '#333333' } : undefined)),
       'pt',
@@ -2523,26 +2548,34 @@ function serializeRich(root) {
     .replace(/<color (#[0-9A-F]{6})>((?:(?!<\/?color)[\s\S])*)<\/color><color \1>/g, '<color $1>$2');
 }
 
-// 背景の欄。値は "#RRGGBB"（色）か { image, mode: tile | cover, tile, color }
-// 画像の背景は、画像を並べて敷く（テクスチャ）。layout.yaml の mode: cover（広げる）は書けば効くが、ここでは選ばせない
-const BG_OPTS = [['', 'なし'], ['color', '色'], ['tile', '画像']];
+// 背景の欄。値は "#RRGGBB"（色）か { image, mode: stretch | cover | tile, tile, color }
+// 画像の背景は、既定では縦横比を変えてボックスいっぱいに広げる（並べない）
+const BG_OPTS = [['', 'なし'], ['color', '色'], ['image', '画像']];
+const BG_MODE_OPTS = [['stretch', '縦横比を変えて、ボックスいっぱいに広げる'], ['cover', '縦横比を保って広げ、はみ出た部分を切る'], ['tile', '画像を並べて敷く']];
 function bgRows(cur, write) {
-  const kind = !cur ? '' : typeof cur !== 'object' ? 'color' : cur.image ? 'tile' : cur.color ? 'color' : '';
+  const kind = !cur ? '' : typeof cur !== 'object' ? 'color' : cur.image ? 'image' : cur.color ? 'color' : '';
   const rows = [
     row('背景', selectEl(BG_OPTS, kind, (v) => {
       if (v === '') return write(undefined);
       if (v === 'color') return write(typeof cur === 'string' ? cur : cur?.color || '#ffffff');
       const keep = typeof cur === 'object' && cur ? cur : {};
       const image = (typeof cur === 'object' && cur?.image) || S.assets[0];
-      if (image) return write({ ...keep, image, mode: 'tile' });
-      pickImageFile().then((path) => (path ? write({ ...keep, image: path, mode: 'tile' }) : renderProps()));
+      if (image) return write({ ...keep, image });
+      pickImageFile().then((path) => (path ? write({ ...keep, image: path }) : renderProps()));
     })),
   ];
   if (kind === 'color') rows.push(row('色', colorEl(typeof cur === 'string' ? cur : cur.color, (v) => write(v || undefined))));
-  if (kind === 'tile') {
+  if (kind === 'image') {
     const opts = [...new Set([...S.assets, cur.image])].map((a) => [a, a.split('/').pop()]);
     rows.push(row('画像', h2(selectEl(opts, cur.image, (v) => write({ ...cur, image: v })), pickBtn((path) => write({ ...cur, image: path })))));
-    if (cur.mode !== 'cover') {
+    const mode = cur.mode || 'stretch';
+    rows.push(row('広げ方', selectEl(BG_MODE_OPTS, mode, (v) => {
+      const { mode: _m, tile: _t, ...rest } = cur;
+      if (v === 'stretch') return write(rest);
+      if (v === 'cover') return write({ ...rest, mode: v });
+      write({ ...rest, mode: v, ...(cur.tile != null ? { tile: cur.tile } : {}) });
+    })));
+    if (mode === 'tile') {
       const u = S.layout.unit;
       const nat = S.imageSizes.get(cur.image);
       const dflt = nat ? fmt((nat.w / 96) * PER_INCH[u]) : '';
@@ -2550,6 +2583,97 @@ function bgRows(cur, write) {
     }
   }
   return rows;
+}
+
+// ---------------------------------------------------------------- 背景の編集
+// ボックスの背景だけを、中身のボックスの分割とは別に分ける。
+// 背景は layout.yaml の background に、ボックスと同じ形の木（split / ratio / children、葉は { background: 背景 }）で書く
+
+function hostBox() {
+  return S.bgEdit ? realSlide()?.boxes.find((b) => b.path === S.bgEdit) || null : null;
+}
+
+function bgEditBtn(box) {
+  const b = btn('背景を編集', () => enterBgEdit(box));
+  // テンプレートの中のボックスは、背景を分けられない（書き先が 1 つに決まらないため）
+  if (box.src?.mode !== 'direct') {
+    b.disabled = true;
+    b.title = 'テンプレートの一部のボックスでは使えません';
+  }
+  return b;
+}
+
+async function enterBgEdit(box) {
+  if (box.src?.mode !== 'direct') return;
+  const bg = (box.node || {}).background;
+  S.bgEdit = box.path;
+  setSel([`${box.path}/bg`]);
+  // 1 つの背景（や背景なし）は、分けていない木（葉 1 つ）に書き直してから編集する。見た目は変わらない
+  if (!isBgTree(bg)) await edit(box, 'background', bg == null ? {} : { background: plain(bg) });
+  else await rebuild();
+  status('背景を編集しています。分割・統合・削除は背景の枠に効きます（中身のボックスは変わりません）。');
+}
+
+async function exitBgEdit() {
+  const host = hostBox();
+  S.bgEdit = null;
+  setSel(host ? [host.path] : []);
+  if (host?.src) {
+    // 分けていない木（葉 1 つ）は、もとの 1 つの背景の書き方に戻す
+    const t = getJS(S.files[host.src.file].doc, [...host.src.path, 'background']);
+    if (isBgTree(t) && !t.split && !t.grid) {
+      const v = t.background == null || (typeof t.background === 'object' && !Object.keys(t.background).length) ? undefined : t.background;
+      await edit(host, 'background', v);
+      status('');
+      return;
+    }
+  }
+  await rebuild();
+  status('');
+}
+
+function renderBgProps(el) {
+  const host = hostBox();
+  el.append(h('h2', null, '背景を編集中'));
+  el.append(h('p', 'note', 'このボックスの背景だけを分けています。中身のボックスの分割とは別です。上の「分割」「統合」「削除」は、背景の枠に効きます。'));
+  const done = h('div', 'actions');
+  done.append(btn('背景の編集を終える', () => exitBgEdit()));
+  el.append(done);
+  if (!host) return;
+  const boxes = (S.sel || []).map(findBox).filter(Boolean);
+  const u = S.layout.unit;
+  if (!boxes.length) {
+    el.append(h('p', 'note', 'プレビューで背景の枠をクリックすると選択し、ここに設定が出ます。'));
+    return;
+  }
+  if (boxes.length === 1) {
+    const box = boxes[0];
+    el.append(h('p', 'meta', `背景の枠　${fmt(box.rect.w)} × ${fmt(box.rect.h)} ${u}`));
+    const fsSize = sizeFields(box);
+    if (fsSize) el.append(fsSize);
+  } else {
+    const r = selectionRect();
+    el.append(h('p', 'meta', `背景の枠 ${boxes.length} 個　${fmt(r.w)} × ${fmt(r.h)} ${u}`));
+    const lca = commonAncestor(boxes);
+    if (lca?.src) {
+      const kids = curSlide().boxes.filter((b) => b.parent === lca.path);
+      const all = kids.filter((k) => overlaps(k.rect, r)).length === kids.length;
+      el.append(multiSizeFields(lca, r, all));
+    }
+  }
+  // 背景は、選んだ枠の 1 つずつに同じ値を設定する（値は、いちばん上か左の枠のものを出す）
+  const first = boxes[0];
+  const fsBg = fieldset(boxes.length > 1 ? '背景（選んだ枠の 1 つずつ）' : '背景');
+  fsBg.append(...bgRows((first.node || {}).background, (v) => {
+    const files = new Set();
+    for (const b of boxes) {
+      if (!b.src) continue;
+      setProp(S.files[b.src.file].doc, b.src.path, 'background', v === undefined ? undefined : structuredClone(v));
+      files.add(b.src.file);
+    }
+    for (const f of files) fileChanged(f);
+  }));
+  el.append(fsBg);
 }
 
 const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト' };
@@ -2801,6 +2925,7 @@ function onKey(e) {
     else undo();
     return;
   }
+  if (S.bgEdit && mod && (e.code === 'KeyC' || e.code === 'KeyV')) return;
   if (mod && e.code === 'KeyC' && (S.sel || []).length) {
     e.preventDefault();
     copySelection();
@@ -2815,7 +2940,10 @@ function onKey(e) {
     pasteSelection();
     return;
   }
-  if (e.key === 'Escape') select(null);
+  if (e.key === 'Escape') {
+    if (S.bgEdit && !(S.sel || []).length) return exitBgEdit();
+    select(null);
+  }
 }
 
 // 選択中のボックスを分割する（分割数と、上下か左右かを選ぶ）

@@ -1,3 +1,5 @@
+import { isBgTree } from './units.js';
+
 // テンプレートの展開。ファイルに依存しない。
 // ノードに use: 名前 があれば、テンプレートの木を写し、
 //   fill: { 子のid: {上書きする設定} } で中身を入れ、
@@ -40,6 +42,8 @@ function annotate(node, file, path, mode) {
   else if (typeof node !== 'object') node = { text: String(node), __scalar: true };
   else if (Array.isArray(node)) return node;
   node.__src = { file, path, mode };
+  // 背景を分けた木も、編集先を付ける
+  if (isBgTree(node.background)) node.background = annotate(node.background, file, [...path, 'background'], mode);
   if (Array.isArray(node.children)) node.children = node.children.map((c, k) => annotate(c, file, [...path, 'children', k], mode));
   if (Array.isArray(node.items)) node.items = node.items.map((c, k) => annotate(c, file, [...path, 'items', k], mode));
   if (node.fill && typeof node.fill === 'object') {
