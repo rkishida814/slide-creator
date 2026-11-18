@@ -2602,7 +2602,7 @@ async function enterBgEdit(box) {
   // 1 つの背景（や背景なし）は、分けていない木（葉 1 つ）に書き直してから編集する。見た目は変わらない
   if (!isBgTree(bg)) await edit(box, 'background', bg == null ? {} : { background: plain(bg) });
   else await rebuild();
-  status('背景を編集しています。分割・統合・削除は背景の枠に効きます（中身のボックスは変わりません）。');
+  status('背景を編集しています。分割・統合・削除をすると、背景の枠を分けたりまとめたりします。中身のボックスは変わりません。');
 }
 
 async function exitBgEdit() {
@@ -2626,7 +2626,7 @@ async function exitBgEdit() {
 function renderBgProps(el) {
   const host = hostBox();
   el.append(h('h2', null, '背景を編集中'));
-  el.append(h('p', 'note', 'このボックスの背景だけを分けています。中身のボックスの分割とは別です。上の「分割」「統合」「削除」は、背景の枠に効きます。'));
+  el.append(h('p', 'note', 'このボックスの背景だけを分けています。中身のボックスの分割とは別です。上の「分割」「統合」「削除」を押すと、背景の枠を分けたり、まとめたり、消したりします。'));
   const done = h('div', 'actions');
   done.append(btn('背景の編集を終える', () => exitBgEdit()));
   el.append(done);
