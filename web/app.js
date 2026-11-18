@@ -328,6 +328,12 @@ function setupFrame() {
       return renderProps();
     }
     if (S.layer === 'bg' && b && !curSlide().boxes.includes(b)) return switchBgHost(b, canvasPoint(e));
+    if (S.layer === 'bg') {
+      // 開いている背景の中でも、クリックした位置に、別の（もっと内側の）背景が付いたボックスがあれば、そちらを開く
+      const r = realLeafAt(e);
+      const owner = r ? bgOwnerOf(bgHostOf(r)) : null;
+      if (owner && owner.path !== S.bgEdit && hasOwnBg(owner)) return switchBgHost(owner, canvasPoint(e));
+    }
     select(b ? b.path : null);
   });
   doc.addEventListener('keydown', onKey);
@@ -789,7 +795,9 @@ function splitBox(box, dir, n) {
     // 背景の枠を分けるときは、分けた枠のそれぞれに同じ背景を写す（見た目は変わらず、あとで 1 つずつ変えられる）
     const bg = plain((box.node || {}).background);
     const children = Array.from({ length: n }, () => (bg != null ? { background: structuredClone(bg) } : {}));
-    replaceNode(doc, path, { split: dir, children });
+    // 枠の余白は、分けた外側に残す（分けた枠は、余白の内側に並ぶ）
+    const pad = plain((box.node || {}).padding);
+    replaceNode(doc, path, { split: dir, ...(pad != null ? { padding: pad } : {}), children });
     return fileChanged(file);
   }
   let pn = plain(box.node || {});
@@ -1590,7 +1598,8 @@ function renderPropsInner() {
 // 余白の 4 つの値 a（上・右・下・左）を、ボックス box の padding に書く値にする。
 // 決まった余白と同じなら書かない。テキストのボックスで 0 にしたときは、0 と書いて残す
 function padValue(box, a) {
-  const def = defaultPadding(box.kind);
+  // 背景の枠には、決まった余白が無い
+  const def = S.layer === 'bg' ? null : defaultPadding(box.kind);
   const u = S.layout.unit;
   const defV = def ? def.map((x) => Math.round(toUnit(x, u) * 1000) / 1000) : null;
   const out = a.every((y) => y === a[0]) ? a[0] : a;
@@ -1601,8 +1610,9 @@ function padValue(box, a) {
 // 余白の欄。targets（省略すると box だけ）の 1 つずつに、同じ余白を書く。値は box のものを出す
 function paddingRow(box, node, targets) {
   const list = targets || [box];
-  // テキストのボックスで余白を書いていないときは、決まった余白（上下左右に 0.5 cm）を出す
-  const def = defaultPadding(box.kind);
+  // テキストのボックスで余白を書いていないときは、決まった余白（上下左右に 0.5 cm）を出す（背景の枠には無い）
+  const bgMode = S.layer === 'bg';
+  const def = bgMode ? null : defaultPadding(box.kind);
   const u = S.layout.unit;
   const defV = def ? def.map((x) => Math.round(toUnit(x, u) * 1000) / 1000) : null;
   const p = node.padding ?? defV;
@@ -1658,7 +1668,8 @@ function paddingRow(box, node, targets) {
   const inset = checkEl('背景ごと余白を設ける', !!node.background_inset, (x) => writeAll('background_inset', () => x || undefined));
   const r2 = row('', inset);
   const both = h('div');
-  both.append(r, rd, r2);
+  // 背景の枠では、余白の分だけ背景が縮むので、「背景ごと余白を設ける」は出さない
+  both.append(r, rd, ...(bgMode ? [] : [r2]));
   return both;
 }
 
@@ -2208,6 +2219,20 @@ function sizeFields(box) {
   const dimInput = (dir) => {
     const lenOf = (b) => (dir === 'rows' ? b.rect.h : b.rect.w);
     const c = sizeCtrl(box, dir);
+    if (!c && S.layer === 'bg' && box.src) {
+      // 背景の枠で、分けていない向き：背景の長さ（枠から余白を引いた長さ）を出し、変えると、左（上）はそのままに、右（下）の余白で合わせる
+      const p = parseBox(box.node?.padding, u);
+      const near = dir === 'rows' ? p.t : p.l;
+      const far = dir === 'rows' ? p.b : p.r;
+      const frame = lenOf(box);
+      return numEl(r3(frame - near - far), '', (v) => {
+        const nf = frame - near - +v;
+        if (!(+v > 0) || nf < -1e-6) return status(`背景の長さは、0 より大きく、枠の長さ（${fmt(frame - near)} ${u}）以下にしてください。`, true);
+        const a = [p.t, p.r, p.b, p.l].map((x) => Math.round(x * 1000) / 1000);
+        a[dir === 'rows' ? 2 : 1] = Math.round(Math.max(0, nf) * 1000) / 1000;
+        return edit(box, 'padding', padValue(box, a));
+      });
+    }
     if (!c) {
       // 外側で分けられていない向きは、値を出すだけ
       const i = numEl(r3(lenOf(box)), '', () => {});
@@ -3285,13 +3310,18 @@ function bgHostOf(b) {
 // 背景モードで開くのはこのボックス。例：背景を付けたボックスに文字を入れて、文字の下に余白のボックスができたとき、
 // 文字のボックスではなく、外側の背景を開く
 function bgOwnerOf(b) {
-  const has = (x) => {
-    const bg = x?.node?.background;
-    // 中身の無い背景（{}。内部の印 __src などだけのもの）は、背景なしとみなす
-    return bg != null && !(typeof bg === 'object' && !Array.isArray(bg) && !Object.keys(bg).some((k) => !k.startsWith('__')));
-  };
-  for (let x = b; x; x = x.parent ? findReal(x.parent) : null) if (has(x)) return x;
+  for (let x = b; x; x = x.parent ? findReal(x.parent) : null) if (hasOwnBg(x)) return x;
   return b;
+}
+
+// ボックス x に背景が付いているか。中身の無い背景（{}。内部の印 __src などだけのもの）や、
+// 背景を編集するために書き直した、分けていない空の木（{ background: {} }）は、背景なしとみなす
+function hasOwnBg(x) {
+  const filled = (o) => o != null && !(typeof o === 'object' && !Array.isArray(o) && !Object.keys(o).some((k) => !k.startsWith('__')));
+  const bg = x?.node?.background;
+  if (!filled(bg)) return false;
+  if (isBgTree(bg) && !bg.split && !bg.grid) return filled(bg.background);
+  return true;
 }
 
 // クリックした点で選ぶもの
@@ -3468,6 +3498,10 @@ function renderBgProps(el) {
   }
   // 背景は、選んだ枠の 1 つずつに同じ値を設定する（値は、いちばん上か左の枠のものを出す）
   const first = boxes[0];
+  // 余白：その分だけ、背景を枠の内側に縮める
+  const fsPad = fieldset(boxes.length > 1 ? '余白（選んだ枠の 1 つずつ）' : '余白');
+  fsPad.append(paddingRow(first, first.node || {}, boxes));
+  el.append(fsPad);
   const fsBg = fieldset(boxes.length > 1 ? '背景（選んだ枠の 1 つずつ）' : '背景');
   fsBg.append(...bgRows((first.node || {}).background, (v) => {
     const files = new Set();

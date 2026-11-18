@@ -78,8 +78,9 @@ function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
   // 背景を分けた木の中は、決まった余白を付けない（隙間なく敷く）
   const pad = parseBox(node.padding ?? (ctx.bg ? null : defaultPadding(kind)), ctx.unit);
   const inner = { x: rect.x + pad.l, y: rect.y + pad.t, w: rect.w - pad.l - pad.r, h: rect.h - pad.t - pad.b };
-  // background_inset: true なら、背景と枠線も余白の分だけ内側に縮める
-  const bgRect = node.background_inset && inner.w > 0 && inner.h > 0 ? inner : rect;
+  // background_inset: true なら、背景と枠線も余白の分だけ内側に縮める。
+  // 背景を分けた木の中の枠は、余白を書けば、いつもその分だけ背景を内側に縮める
+  const bgRect = (node.background_inset || ctx.bg) && inner.w > 0 && inner.h > 0 ? inner : rect;
   if (isBgTree(node.background)) layoutBgTree(node.background, bgRect, path, ctx);
   else pushBackground(node.background, bgRect, path, ctx);
   if (node.border) ctx.elements.push({ type: 'rect', path, rect: bgRect, fill: null, border: node.border });
