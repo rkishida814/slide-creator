@@ -2862,7 +2862,6 @@ function richEditor(value, opts, onCommit) {
     const pick = document.createElement('input');
     pick.type = 'color';
     pick.className = 'rich-color';
-    pick.setAttribute('list', refreshColorList());
     pick.value = shownColor();
     pick.onchange = () => use(pick.value);
     const row = h('div', 'rich-menu-row');
