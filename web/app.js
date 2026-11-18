@@ -1080,26 +1080,97 @@ function dupPlan() {
   const full = (b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b)).every((l) => selSet.has(l.path));
   const isRows = (b) => b && b.kind === 'split' && b.node?.split === 'rows' && b.src;
   const R = rowSplitOf(boxes, selSet);
-  if (!R) return null;
   // 空きが足りなければ、外側の上下の並びでも探す
   for (let anc = R; isRows(anc); anc = anc.parent ? findBox(anc.parent) : null) {
     const r = splitEntries(anc, selSet);
-    if (!r) return null;
+    if (!r) break;
     const part = r.entries.slice(r.i0, r.i1 + 1);
     const D = part.reduce((s2, e) => s2 + e.len, 0) + r.gap * part.length;
     const room = r.entries.slice(r.i1 + 1).filter((e) => isEmptyNode(e.node)).reduce((s2, e) => s2 + e.len, 0);
     if (D <= room + 1e-6) return { anc, r, D };
+  }
+  return partDupPlan(boxes, selSet);
+}
+
+// 行の一部（左右に並ぶうちのいくつか）を選んだとき：選んだボックスを、同じ横の位置・幅・高さで、すぐ下に新しい行として足す。
+// 新しい行の、選んでいない場所は空きにする。足した高さの分は、下のほうの空きを縮めて埋める（外側の上下の並びでも探す）
+function partDupPlan(boxes, selSet) {
+  const slide = curSlide();
+  const u = selectionUnit();
+  if (!u) return null;
+  const target = u.kind === 'range' ? u.lca : u.box;
+  if (!target?.src) return null;
+  const unit = S.layout.unit;
+  const sr = selectionRect();
+  const D = sr.h;
+  const kidsOf = (b) => slide.boxes.filter((x) => x.parent === b.path);
+  const leavesOf = (b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b)).map((x) => x.path);
+  const copyOf = (b) => {
+    let n = writtenNode(b);
+    if (typeof n === 'string') n = { text: n };
+    return stripIds(n);
+  };
+  // 左右の余白だけを残す（上下の余白は、新しい行の高さに入れない）
+  const sidePad = (b) => {
+    const p = parseBox(b.node?.padding, unit);
+    return p.l || p.r ? { padding: [0, round4(p.r), 0, round4(p.l)] } : {};
+  };
+  // b の中の、選んだ所だけを写した形（左右の並びは、ほかを空きにして位置と幅を保つ。上下の並びは、選んだ所を含む部分だけを残す）
+  const skel = (b) => {
+    if (b.path === target.path) {
+      if (u.kind === 'node') return copyOf(b);
+      const ks = kidsOf(b);
+      const n = b.node;
+      return {
+        split: n.split,
+        ...(Array.isArray(n.ratio) && n.ratio.length === ks.length ? { ratio: plain(n.ratio) } : {}),
+        ...(n.gap != null ? { gap: n.gap } : {}),
+        ...sidePad(b),
+        children: ks.map((k, i) => (i >= u.i0 && i <= u.i1 ? copyOf(k) : {})),
+      };
+    }
+    if (b.kind !== 'split') return null;
+    const ks = kidsOf(b);
+    const c = ks.find((k) => within(target, k));
+    if (!c) return null;
+    const inner = skel(c);
+    if (!inner) return null;
+    const n = b.node;
+    if (n.split === 'rows') {
+      const pad = sidePad(b);
+      return pad.padding ? { split: 'rows', ...pad, children: [inner] } : inner;
+    }
+    return {
+      split: 'cols',
+      ...(Array.isArray(n.ratio) && n.ratio.length === ks.length ? { ratio: plain(n.ratio) } : {}),
+      ...(n.gap != null ? { gap: n.gap } : {}),
+      ...sidePad(b),
+      children: ks.map((k) => (k === c ? inner : {})),
+    };
+  };
+  // 選んだ所を含む上下の並びを、内側から外側へ。下に十分な空きがあるところに足す
+  for (let anc = target.parent ? findBox(target.parent) : null; anc; anc = anc.parent ? findBox(anc.parent) : null) {
+    if (anc.kind !== 'split' || anc.node?.split !== 'rows' || !anc.src) continue;
+    const E = kidsOf(anc).find((k) => within(target, k));
+    if (!E) continue;
+    const r = splitEntries(anc, new Set(leavesOf(E)));
+    if (!r) continue;
+    const room = r.entries.slice(r.i1 + 1).filter((e) => isEmptyNode(e.node)).reduce((s2, e) => s2 + e.len, 0);
+    if (D + r.gap > room + 1e-6) continue;
+    const node = skel(E);
+    if (!node) return null;
+    return { anc, r, D: D + r.gap, copies: [{ node, ratio: `${round4(D)}${unit}`, len: D }] };
   }
   return null;
 }
 
 function duplicateRow() {
   const plan = dupPlan();
-  if (!plan) return status('複製できません（行全体を選んでいないか、下の空きが足りません）。', true);
+  if (!plan) return status('複製できません（下の空きが足りません）。', true);
   const { anc, r, D } = plan;
   const { entries, i0, i1, gap, k, u } = r;
   // 複製は、元と同じ長さに固定する（中の名前は外す）
-  const copies = entries.slice(i0, i1 + 1).map((e) => ({ node: stripIds(structuredClone(e.node ?? {})), ratio: `${round2(e.len)}${u}`, len: e.len }));
+  const copies = plan.copies || entries.slice(i0, i1 + 1).map((e) => ({ node: stripIds(structuredClone(e.node ?? {})), ratio: `${round2(e.len)}${u}`, len: e.len }));
   const after = entries.slice(i1 + 1).map((e) => ({ ...e }));
   // 下のほうの空きから縮める
   let need = D;
