@@ -2,7 +2,7 @@
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
-import { richToHTML, paragraphs, isBullet, underlineHTML } from '../src/core/richtext.js';
+import { richToHTML, paragraphs, bulletType, underlineHTML } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, parseBox, isBgTree } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
@@ -2401,7 +2401,7 @@ async function pickImageFile() {
 const SOFT_BREAK = '<span class="sb" contenteditable="false">↵</span><br>';
 function editorHTML(value) {
   return paragraphs(value)
-    .map((p) => `<div${isBullet(p) ? ' class="li"' : ''}>${richToHTML(p, SOFT_BREAK, (src) => S.imageURLs.get(src) || '') || '<br>'}</div>`)
+    .map((p) => `<div${{ normal: ' class="li"', hidden: ' class="li lih"' }[bulletType(p)] || ''}>${richToHTML(p, SOFT_BREAK, (src) => S.imageURLs.get(src) || '') || '<br>'}</div>`)
     .join('');
 }
 
@@ -2552,7 +2552,18 @@ function richEditor(value, onCommit) {
   // 箇条書き：カーソルのある段落（選んだ段落）の行頭に「•」を付ける。もう一度押すと外す
   const bulletIcon = '<svg viewBox="0 0 20 16" width="20" height="16"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.6"/><circle cx="2.5" cy="8" r="1.6"/><circle cx="2.5" cy="13" r="1.6"/></g><g stroke="currentColor" stroke-width="1.6"><path d="M7 3h12M7 8h12M7 13h12"/></g></svg>';
   const grpPara = h('span', 'rich-group');
-  grpPara.append(iconBtn('rich-bullet', bulletIcon, '箇条書き', () => toggleBullet()));
+  grpPara.append(
+    iconBtn('rich-bullet', bulletIcon, '箇条書き（もう一度押すと外す）', () => toggleBullet()),
+    dropMenu('箇条書きの種類', (menu, close) => {
+      const item = (html, type) => menu.append(iconBtn('rich-item', html, '', () => {
+        restoreSel();
+        setBullet(type);
+        close();
+      }));
+      item('• 通常', 'normal');
+      item('不可視（字下げだけ。行頭の • を描かない）', 'hidden');
+    }),
+  );
 
   bar.append(grpFont, sep(), grpColor, sep(), grpPara);
   // メニューの外を押したら閉じる（欄が画面から消えたら、この見張りも外す）
@@ -2647,18 +2658,28 @@ function richEditor(value, onCommit) {
     commit();
   };
 
-  const toggleBullet = () => {
+  // 箇条書きにする段落：カーソルのある段落（選んだ段落）。欄にカーソルが無ければ全部の段落
+  const bulletTargets = () => {
     const sel = getSelection();
-    if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).commonAncestorContainer)) {
-      // 欄にカーソルが無ければ、全部の段落に付ける（外す）
-      const all = [...ed.children];
-      const on = !all.every((d) => d.classList.contains('li'));
-      all.forEach((d) => d.classList.toggle('li', on));
-      return commit();
-    }
-    const ds = blocksIn(sel.getRangeAt(0));
+    if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).commonAncestorContainer)) return [...ed.children];
+    return blocksIn(sel.getRangeAt(0));
+  };
+  // ボタン：通常の箇条書きを付ける。全部が箇条書きなら外す
+  const toggleBullet = () => {
+    const ds = bulletTargets();
     const on = !ds.every((d) => d.classList.contains('li'));
-    ds.forEach((d) => d.classList.toggle('li', on));
+    ds.forEach((d) => {
+      d.classList.toggle('li', on);
+      d.classList.remove('lih');
+    });
+    commit();
+  };
+  // ▾ のメニュー：通常か不可視にする
+  const setBullet = (type) => {
+    for (const d of bulletTargets()) {
+      d.classList.add('li');
+      d.classList.toggle('lih', type === 'hidden');
+    }
     commit();
   };
   ed.onfocus = () => document.execCommand('defaultParagraphSeparator', false, 'div');
@@ -2770,7 +2791,7 @@ function serializeRich(root) {
     if (c.nodeType === 1 && (c.nodeName === 'DIV' || c.nodeName === 'P')) {
       if (pending !== null) paras.push(pending);
       pending = null;
-      paras.push((c.classList.contains('li') ? '<li>' : '') + inline(c));
+      paras.push((c.classList.contains('li') ? (c.classList.contains('lih') ? '<li hidden>' : '<li>') : '') + inline(c));
     } else {
       pending = (pending ?? '') + inline({ childNodes: [c] });
     }

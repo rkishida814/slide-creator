@@ -1,5 +1,5 @@
 // 配置結果 → HTML。PDF/PNG 出力（Chrome）とブラウザ版の表示で共用する。
-import { richToHTML, paragraphs, isBullet } from './richtext.js';
+import { richToHTML, paragraphs, bulletType } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
 // フォントは、英数字（英語）用と日本語用を別々に選ぶ（font.family と font.family_ja）。
@@ -122,6 +122,7 @@ html, body { margin: 0; padding: 0; background: #fff; }
 /* 箇条書き：行頭に「•」。折り返した行は文字の頭に揃える */
 .pa.li { position: relative; padding-left: 1.1em; }
 .pa.li::before { content: '\\2022'; position: absolute; left: 0.1em; }
+.pa.li.lih::before { content: none; }
 /* 下線：二重線と、画像の線（画像を文字の下に、縦横比を保たずに伸ばして敷く） */
 u.ud { text-decoration-style: double; }
 u.ui { text-decoration: none; background-repeat: no-repeat; background-position: 0 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -172,7 +173,7 @@ function renderElement(e, L, opts) {
       ...(glowOf(f) ? [`text-shadow:${glowCSS(glowOf(f))}`] : []),
     ].join(';');
     const paras = paragraphs(e.text)
-      .map((p, i) => `<div class="pa${isBullet(p) ? ' li' : ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br>', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
+      .map((p, i) => `<div class="pa${{ normal: ' li', hidden: ' li lih' }[bulletType(p)] || ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br>', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
       .join('');
     return `<div ${data} class="txt" style="${st}"><div>${paras}</div></div>`;
   }

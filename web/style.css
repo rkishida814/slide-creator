@@ -265,6 +265,7 @@ legend { padding: 0 4px 0 0; }
 /* 編集欄の中の、箇条書きと下線 */
 .rich > div.li { position: relative; padding-left: 1.1em; }
 .rich > div.li::before { content: '\2022'; position: absolute; left: 0.1em; }
+.rich > div.li.lih::before { color: #c7ccd4; } /* 不可視の箇条書き：編集欄では薄く出す */
 .rich u.ud { text-decoration-style: double; }
 .rich u.ui { text-decoration: none; background-repeat: no-repeat; background-position: 0 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; }
 .rich-menu u.ud { text-decoration-style: double; }

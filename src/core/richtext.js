@@ -5,9 +5,10 @@
 //   改行（\n）… 段落の区切り（Enter）。段落の間隔（para_space）が足される
 //   <br>      … 段落の中の改行（Shift+Enter）。行間だけで、段落の間隔は足さない
 //   <li>      … 段落の頭に書くと、その段落を箇条書きにする（行頭に「•」。折り返した行は文字の頭に揃う）
+//   <li hidden> … 「•」を描かない箇条書き（字下げだけ。前の箇条書きの文字の頭に揃える）
 //   <color #RRGGBB>色を付ける部分</color> … 一部の文字の色
 // 例: "New bone area (mm<sup>2</sup>)"、"<color #C00000>有意差あり</color>"、"<li>1 つ目\n<li>2 つ目"
-const TAG = /<(\/?)(b|i|sup|sub)>|<color\s+#?([0-9a-fA-F]{6})\s*>|<\/(color)>|<br\s*\/?>|<u(\s[^>]*)?>|<\/(u)>|<li>/gi;
+const TAG = /<(\/?)(b|i|sup|sub)>|<color\s+#?([0-9a-fA-F]{6})\s*>|<\/(color)>|<br\s*\/?>|<u(\s[^>]*)?>|<\/(u)>|<li(?:\s+hidden)?>/gi;
 
 // 段落に分ける
 export function paragraphs(s) {
@@ -16,7 +17,13 @@ export function paragraphs(s) {
 
 // 段落が箇条書きか（段落の頭の <li>）
 export function isBullet(p) {
-  return /^<li>/i.test(String(p ?? ''));
+  return /^<li(\s+hidden)?>/i.test(String(p ?? ''));
+}
+
+// 箇条書きの種類：'normal'（•）/ 'hidden'（•を描かない。字下げだけ）/ null（箇条書きでない）
+export function bulletType(p) {
+  const m = String(p ?? '').match(/^<li(\s+hidden)?>/i);
+  return m ? (m[1] ? 'hidden' : 'normal') : null;
 }
 
 // <u …> の中身 → { type: single | double | img, img, w }
@@ -53,7 +60,7 @@ export function parseRich(s) {
     else if (colorEnd) colors.pop();
     else if (uEnd) unders.pop();
     else if (/^<u[\s>]/i.test(all)) unders.push(underlineOf(uAttr));
-    else if (/^<li>/i.test(all)) continue;
+    else if (/^<li[\s>]/i.test(all)) continue;
     else if (!tag) out.push({ text: '', br: true });
     else {
       const k = tag.toLowerCase();
@@ -65,7 +72,7 @@ export function parseRich(s) {
 }
 
 export function hasRich(s) {
-  return /<\/?(b|i|sup|sub|u)>|<u\s|<\/?color[\s>]|<br\s*\/?>|<li>|\n/i.test(String(s ?? ''));
+  return /<\/?(b|i|sup|sub|u)>|<u\s|<\/?color[\s>]|<br\s*\/?>|<li[\s>]|\n/i.test(String(s ?? ''));
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);

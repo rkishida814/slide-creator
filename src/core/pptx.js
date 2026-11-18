@@ -4,7 +4,7 @@
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
 import { DEFAULT_FONT, DEFAULT_FONT_JA, pptxFontName, glowOf } from './html.js';
-import { parseRich, hasRich, paragraphs, isBullet } from './richtext.js';
+import { parseRich, hasRich, paragraphs, bulletType } from './richtext.js';
 
 const hex = (c, fb) => {
   if (!c) return fb;
@@ -113,7 +113,9 @@ function textRuns(text, f, paraSpace, glow, size = 24) {
     if (soft) runs.push({ text: '', options: { softBreakBefore: true } });
     if (runs.length === start) runs.push({ text: '', options: {} }); // 空の段落
     if (pi > 0 && paraSpace > 0) runs[start].options.paraSpaceBefore = paraSpace;
-    if (isBullet(p)) runs[start].options.bullet = { indent: Math.round(size * 1.1 * 10) / 10 };
+    // 不可視の箇条書きは、行頭の記号を空白（見えない文字）にして、字下げだけを残す
+    const bt = bulletType(p);
+    if (bt) runs[start].options.bullet = { indent: Math.round(size * 1.1 * 10) / 10, ...(bt === 'hidden' ? { characterCode: '00A0' } : {}) };
     if (pi < paras.length - 1) runs[runs.length - 1].options.breakLine = true;
   });
   return runs;
