@@ -114,7 +114,6 @@ ${fontLink}<style>
 html, body { margin: 0; padding: 0; background: #fff; }
 .slide { position: relative; overflow: hidden; background: #fff; break-after: page; }
 .slide > div { position: absolute; box-sizing: border-box; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.tex { background-repeat: repeat; background-position: 0 0; }
 .img { overflow: hidden; }
 .img img { position: absolute; display: block; max-width: none; }
 .txt { display: flex; flex-direction: column; overflow: visible; }
@@ -139,10 +138,6 @@ function renderElement(e, L, opts) {
     const bw = e.border ? `${e.border.width ?? 1}pt` : '0';
     const bc = e.border ? color(e.border.color) : 'transparent';
     return `<div ${data} style="${pos(e.rect, L)};background:${e.fill ? color(e.fill) : 'transparent'};border:${bw} solid ${bc}"></div>`;
-  }
-  if (e.type === 'texture') {
-    const url = opts.srcURL ? opts.srcURL(e.src) : e.src;
-    return `<div ${data} class="tex" style="${pos(e.rect, L)};background-image:url('${esc(url)}');background-size:${L(e.tileW)} auto"></div>`;
   }
   if (e.type === 'missing') return `<div ${data} class="missing" style="${pos(e.rect, L)}"></div>`;
   if (e.type === 'image') {

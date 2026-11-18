@@ -52,11 +52,6 @@ export async function buildPPTX(PptxGen, layout, imageRef) {
             : { w: box.w, h: box.h }),
           altText: e.path,
         });
-      } else if (e.type === 'texture') {
-        // 画像を 1 枚だけ置き、書き出した後で「図を並べて表示」に書き換える（finishPPTX）。
-        // 並べる倍率は、画像を 96 dpi とみなした大きさに対する、模様 1 つの幅の比
-        const scale = Math.round(((e.tileW * k) / (e.natural.w / 96)) * 100000);
-        slide.addImage({ ...(await imageRef(e.src)), ...box, objectName: `sc-tile:${scale}`, altText: e.path });
       } else if (e.type === 'text') {
         const f = e.font;
         const g = glowOf(f);
@@ -117,7 +112,7 @@ function textRuns(text, f, paraSpace, glow) {
 }
 
 /**
- * pptxgenjs で作ったものを書き出し、並べる背景（sc-tile）の画像を「図を並べて表示」に書き換える。
+ * pptxgenjs で作ったものを書き出し、文字のフォントを英語用と日本語用に分けて書き直す。
  * @param JSZip  Node では jszip、ブラウザでは window.JSZip
  * @param type   'nodebuffer' / 'blob' / 'arraybuffer'
  */
@@ -131,18 +126,7 @@ export async function finishPPTX(pres, JSZip, type) {
     xml = xml.replace(/<a:(latin|ea|cs) typeface="([^"|]*)\|([^"]*)"([^>]*?)\/>/g, (m, kind, latin, ja, rest) =>
       kind === 'ea' ? `<a:ea typeface="${ja}"${rest.replace(/charset="[^"]*"/, 'charset="-128"')}/>` : `<a:${kind} typeface="${latin}"${rest}/>`);
     xml = xml.replace(/typeface="([^"|]*)\|[^"]*"/g, 'typeface="$1"');
-    if (!xml.includes('name="sc-tile:')) {
-      zip.file(name, xml);
-      continue;
-    }
-    const fixed = xml.replace(/<p:pic>[\s\S]*?<\/p:pic>/g, (pic) => {
-      const m = pic.match(/name="sc-tile:(\d+)"/);
-      if (!m) return pic;
-      return pic
-        .replace(/<a:stretch>\s*<a:fillRect\/>\s*<\/a:stretch>/, `<a:tile tx="0" ty="0" sx="${m[1]}" sy="${m[1]}" flip="none" algn="tl"/>`)
-        .replace(/name="sc-tile:\d+"/, 'name="背景（模様）"');
-    });
-    zip.file(name, fixed);
+    zip.file(name, xml);
   }
   return zip.generateAsync({ type, compression: 'DEFLATE' });
 }

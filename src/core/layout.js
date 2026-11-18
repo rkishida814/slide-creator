@@ -207,10 +207,10 @@ function layoutBgTree(tree, rect, host, ctx) {
 }
 
 // 背景。色だけなら "#RRGGBB"。画像を使うときは
-//   { image: 画像のファイル, mode: stretch | cover | tile, tile: 模様 1 つの幅, color: 下地の色 }
-//   mode: stretch（既定）… 縦横比を変えて、ボックスいっぱいに広げる。並べない
+//   { image: 画像のファイル, mode: stretch | cover, color: 下地の色 }
+//   mode: stretch（既定）… 縦横比を変えて、ボックスいっぱいに広げる
 //         cover … 縦横比を保ってボックスいっぱいに広げ、はみ出しを中央から切る
-//         tile  … 画像を並べて敷く。tile を省くと、画像を 96 dpi として測った幅にする
+//   cover 以外の mode は stretch として描く
 function pushBackground(bg, rect, path, ctx) {
   if (!bg) return;
   if (typeof bg !== 'object') {
@@ -224,35 +224,21 @@ function pushBackground(bg, rect, path, ctx) {
     ctx.issues.push({ level: 'error', path, msg: `背景の画像が読めない: ${bg.image}` });
     return;
   }
-  const mode = bg.mode || 'stretch';
-  if (mode === 'stretch' || mode === 'cover') {
-    let crop = [0, 0, 1, 1];
-    if (mode === 'cover') {
-      // 枠いっぱいに広げ、はみ出しを中央から切る
-      const ia = nat.w / nat.h;
-      const ba = rect.w / rect.h;
-      if (ia > ba) {
-        const keep = ba / ia;
-        crop = [(1 - keep) / 2, 0, (1 + keep) / 2, 1];
-      } else {
-        const keep = ia / ba;
-        crop = [0, (1 - keep) / 2, 1, (1 + keep) / 2];
-      }
+  let crop = [0, 0, 1, 1];
+  if (bg.mode === 'cover') {
+    // 枠いっぱいに広げ、はみ出しを中央から切る
+    const ia = nat.w / nat.h;
+    const ba = rect.w / rect.h;
+    if (ia > ba) {
+      const keep = ba / ia;
+      crop = [(1 - keep) / 2, 0, (1 + keep) / 2, 1];
+    } else {
+      const keep = ia / ba;
+      crop = [0, (1 - keep) / 2, 1, (1 + keep) / 2];
     }
-    const dpi = Math.min(((crop[2] - crop[0]) * nat.w) / (rect.w / perInch(ctx.unit)), ((crop[3] - crop[1]) * nat.h) / (rect.h / perInch(ctx.unit)));
-    ctx.elements.push({ type: 'image', path, src: bg.image, rect, cell: rect, crop, natural: nat, dpi: Math.round(dpi), background: true });
-    return;
   }
-  if (mode !== 'tile') {
-    ctx.issues.push({ level: 'error', path, msg: `背景の mode は stretch / cover / tile（"${mode}"）` });
-    return;
-  }
-  const tileW = bg.tile != null ? toUnit(bg.tile, ctx.unit) : (nat.w / 96) * perInch(ctx.unit);
-  if (!(tileW > 0)) {
-    ctx.issues.push({ level: 'error', path, msg: `背景の模様の幅が不正: ${bg.tile}` });
-    return;
-  }
-  ctx.elements.push({ type: 'texture', path, rect, src: bg.image, tileW, natural: nat });
+  const dpi = Math.min(((crop[2] - crop[0]) * nat.w) / (rect.w / perInch(ctx.unit)), ((crop[3] - crop[1]) * nat.h) / (rect.h / perInch(ctx.unit)));
+  ctx.elements.push({ type: 'image', path, src: bg.image, rect, cell: rect, crop, natural: nat, dpi: Math.round(dpi), background: true });
 }
 
 function layoutText(node, rect, style, path, ctx) {

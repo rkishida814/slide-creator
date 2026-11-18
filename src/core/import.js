@@ -71,7 +71,6 @@ export function importLayout(sub, opts) {
     if (isBgTree(bg)) return conv(bg); // 背景を分けた木は、ボックスと同じように写す
     const o = { ...bg };
     if (o.image) o.image = joinPath(opts.dir, o.image);
-    if (o.tile != null) o.tile = len(o.tile);
     return o;
   };
   const boxOf = (p) => (Array.isArray(p) ? p.map(len) : len(p));
