@@ -2551,7 +2551,9 @@ function serializeRich(root) {
 // 背景の欄。値は "#RRGGBB"（色）か { image, mode: stretch | cover | tile, tile, color }
 // 画像の背景は、既定では縦横比を変えてボックスいっぱいに広げる（並べない）
 const BG_OPTS = [['', 'なし'], ['color', '色'], ['image', '画像']];
-const BG_MODE_OPTS = [['stretch', '縦横比を変えて、ボックスいっぱいに広げる'], ['cover', '縦横比を保って広げ、はみ出た部分を切る'], ['tile', '画像を並べて敷く']];
+// 同じ画像を縦横に繰り返す（mode: tile）は選ばせない。以前の画面で書いたボックスにだけ、いまの状態として出す
+const BG_MODE_OPTS = [['stretch', '縦横比を変えて、ボックスいっぱいに広げる'], ['cover', '縦横比を保って広げ、はみ出た部分を切る']];
+const BG_MODE_TILE = ['tile', '同じ画像を縦横に繰り返す（以前の設定）'];
 function bgRows(cur, write) {
   const kind = !cur ? '' : typeof cur !== 'object' ? 'color' : cur.image ? 'image' : cur.color ? 'color' : '';
   const rows = [
@@ -2569,17 +2571,16 @@ function bgRows(cur, write) {
     const opts = [...new Set([...S.assets, cur.image])].map((a) => [a, a.split('/').pop()]);
     rows.push(row('画像', h2(selectEl(opts, cur.image, (v) => write({ ...cur, image: v })), pickBtn((path) => write({ ...cur, image: path })))));
     const mode = cur.mode || 'stretch';
-    rows.push(row('広げ方', selectEl(BG_MODE_OPTS, mode, (v) => {
+    rows.push(row('広げ方', selectEl(mode === 'tile' ? [...BG_MODE_OPTS, BG_MODE_TILE] : BG_MODE_OPTS, mode, (v) => {
       const { mode: _m, tile: _t, ...rest } = cur;
       if (v === 'stretch') return write(rest);
       if (v === 'cover') return write({ ...rest, mode: v });
-      write({ ...rest, mode: v, ...(cur.tile != null ? { tile: cur.tile } : {}) });
     })));
     if (mode === 'tile') {
       const u = S.layout.unit;
       const nat = S.imageSizes.get(cur.image);
       const dflt = nat ? fmt((nat.w / 96) * PER_INCH[u]) : '';
-      rows.push(row('画像1枚の幅', h2(numEl(cur.tile ?? dflt, '', (v) => +v > 0 && write({ ...cur, tile: +v })), u)));
+      rows.push(row('繰り返す幅', h2(numEl(cur.tile ?? dflt, '', (v) => +v > 0 && write({ ...cur, tile: +v })), u)));
     }
   }
   return rows;
