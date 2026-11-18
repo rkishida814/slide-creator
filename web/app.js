@@ -205,6 +205,11 @@ function renderPreview() {
     srcURL: (src) => S.imageURLs.get(src) || '',
   }).replace('</style>', `${FRAME_CSS}</style>`);
   frame.onload = setupFrame;
+  // プレビューを描き直すあいだ、キー操作（⌘Z など）がどこにも届かなくならないように、プレビューにあったカーソルをアプリに戻す
+  if (document.activeElement === frame) {
+    frame.blur();
+    window.focus();
+  }
   frame.srcdoc = html;
 }
 
@@ -253,6 +258,9 @@ function setupFrame() {
   let drag = null;
   let dragged = false;
   doc.addEventListener('mousedown', (e) => {
+    // 設定欄の入力欄にカーソルが残っていると、⌘Z がその欄の「元に戻す」になり、ボックスの操作が戻らない。プレビューを押したら外す
+    const ae = document.activeElement;
+    if (ae && ae !== document.body && ae !== frame) ae.blur();
     if (e.button !== 0) return;
     // 背景では、いま開いている背景の枠だけをドラッグで選ぶ（別のボックスはクリックで開く）
     const b = S.layer === 'bg' ? leafAt(e) : pickAt(e);
