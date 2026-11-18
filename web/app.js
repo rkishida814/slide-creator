@@ -1324,7 +1324,49 @@ function fitLabels() {
   }
 }
 
+// 設定欄を作り直す。テキストの欄に文字を打っている最中なら、作り直した欄にカーソルを移し、同じ位置（先頭から何文字目か）に置く
+// （打った文字を書き込むと、文字の高さに合わせてボックスを直すために描き直すことがあり、そのたびに欄が作り直されて入力が止まるため。
+//   ボックスを直すとボックスの場所が変わることがあるので、古い欄は戻さず、新しい欄に移る）
 function renderProps() {
+  const act = document.activeElement;
+  const oldEd = act?.classList?.contains('rich') && $('#node').contains(act) ? act : null;
+  const sel = getSelection();
+  let pos = null;
+  if (oldEd && sel.rangeCount && oldEd.contains(sel.getRangeAt(0).startContainer)) {
+    const r = sel.getRangeAt(0);
+    const off = (node, o) => {
+      const x = document.createRange();
+      x.setStart(oldEd, 0);
+      x.setEnd(node, o);
+      return x.toString().length;
+    };
+    pos = { start: off(r.startContainer, r.startOffset), end: off(r.endContainer, r.endOffset) };
+  }
+  renderPropsInner();
+  if (!oldEd || oldEd.isConnected) return;
+  const ed = $('#node').querySelector('.rich');
+  if (!ed) return;
+  ed.focus();
+  if (!pos) return;
+  // 先頭から n 文字目の位置（文字の節と、その中の位置）
+  const at = (n) => {
+    const w = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+    let last = null;
+    for (let t = w.nextNode(); t; t = w.nextNode()) {
+      if (n <= t.nodeValue.length) return [t, n];
+      n -= t.nodeValue.length;
+      last = t;
+    }
+    return last ? [last, last.nodeValue.length] : [ed, ed.childNodes.length];
+  };
+  const r = document.createRange();
+  r.setStart(...at(pos.start));
+  r.setEnd(...at(pos.end));
+  sel.removeAllRanges();
+  sel.addRange(r);
+}
+
+function renderPropsInner() {
   renderGlobal();
   queueMicrotask(fitLabels);
   if (S.keepPanel && S.keepPanel === S.selected) {
@@ -2316,7 +2358,7 @@ function textFields(box, node, inh) {
   const f = node.font || {};
   const fi = inh.font || {};
   fs.append(
-    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), { base: f.size ?? fi.size ?? DEFAULT_SIZE }, (v) => {
+    row('テキスト', richEditor(wrapWhole(String(node.text ?? ''), f), { base: f.size ?? fi.size ?? DEFAULT_SIZE, path: box.path }, (v) => {
       S.keepPanel = box.path;
       const off = box.src.mode === 'direct' ? undefined : false;
       const pairs = [['text', v]];
@@ -2413,6 +2455,7 @@ function editorHTML(value, base = DEFAULT_SIZE) {
 function richEditor(value, opts, onCommit) {
   const base = opts.base || DEFAULT_SIZE; // ボックスの文字の大きさ（pt）。一部の大きさは、これに対する比で編集欄に出す
   const wrap = h('div', 'rich-wrap');
+  if (opts.path) wrap.dataset.path = opts.path; // どのボックスの欄か（打っている最中に設定欄を作り直すとき、この欄を戻す）
   const bar = h('div', 'rich-bar');
   const ed = document.createElement('div');
   ed.className = 'rich';
@@ -2559,8 +2602,8 @@ function richEditor(value, opts, onCommit) {
         }
       });
     }),
-    iconBtn('rich-sup', 'x<sup>2</sup>', '上付き', exec('superscript')),
-    iconBtn('rich-sub', 'x<sub>2</sub>', '下付き', exec('subscript')),
+    iconBtn('rich-sup', '<span>x<sup>2</sup></span>', '上付き', exec('superscript')),
+    iconBtn('rich-sub', '<span>x<sub>2</sub></span>', '下付き', exec('subscript')),
   );
 
   // 文字の色：「A」で、下の帯の色を付ける。▾ で色を選ぶ・色を外す

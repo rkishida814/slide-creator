@@ -281,3 +281,6 @@ legend { padding: 0 4px 0 0; }
 .rich-size { width: 3.6em; height: 28px; }
 .rich-unit { color: var(--muted); font-size: 12px; margin-right: 4px; }
 .rich-menu .rich-item { white-space: normal; }
+.rich-sup sup, .rich-sub sub { font-size: .65em; line-height: 0; position: relative; }
+.rich-sup sup { vertical-align: 0; top: -0.55em; }
+.rich-sub sub { vertical-align: 0; top: 0.35em; }
