@@ -2460,26 +2460,35 @@ function textFields(box, node, inh) {
 }
 
 
-// 文字の下地（text_bg）：色・透明度（%）・広がり（文字の塊の外に広げる長さ）。色を消すと下地を外す
+// 文字の下地（text_bg）：付けるか・色・透明度（%）の 1 行
 function textBgRows(box, node, edit) {
   const raw = node.text_bg;
   const cur = raw && typeof raw === 'object' ? plain(raw) : raw ? { color: String(raw) } : null;
+  const on = !!cur?.color;
   const write = (patch) => {
     const next = { ...(cur || {}), ...patch };
     for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
-    return edit(box, 'text_bg', next.color ? next : undefined);
+    return edit(box, 'text_bg', next);
   };
-  const rows = [row('文字の下地', colorEl(cur?.color, (v) => (v ? write({ color: v }) : edit(box, 'text_bg', undefined))), '背景とは別に、文字の塊の下だけに敷く。PPTX ではテキストボックスの塗りつぶし')];
-  if (!cur?.color) return rows;
-  const t = Math.round((1 - Number(cur.opacity ?? 1)) * 100);
-  rows.push(
-    row('下地の透明度', h2(numEl(t, '', (v) => {
-      const x = Math.min(100, Math.max(0, +v || 0));
-      return write({ opacity: x ? Math.round((1 - x / 100) * 100) / 100 : undefined });
-    }, 5), '%')),
-    row('下地の広がり', h2(numEl(cur.margin ?? '', '自動', (v) => write({ margin: v === '' ? undefined : Math.max(0, +v || 0) }), 0.05), S.layout.unit), '文字の塊の外に広げる長さ。空欄なら文字の大きさの 0.15 倍'),
-  );
-  return rows;
+  const chk = document.createElement('input');
+  chk.type = 'checkbox';
+  chk.checked = on;
+  chk.onchange = () => (chk.checked ? write({ color: S.lastTextBg || '#ffff00' }) : edit(box, 'text_bg', undefined));
+  const c = document.createElement('input');
+  c.type = 'color';
+  c.setAttribute('list', refreshColorList());
+  c.value = normColor(cur?.color) || S.lastTextBg || '#ffff00';
+  c.onchange = () => {
+    S.lastTextBg = c.value;
+    return write({ color: c.value });
+  };
+  const t = numEl(on ? Math.round((1 - Number(cur.opacity ?? 1)) * 100) : 0, '', (v) => {
+    const x = Math.min(100, Math.max(0, +v || 0));
+    return write({ color: cur?.color || c.value, opacity: x ? Math.round((1 - x / 100) * 100) / 100 : undefined });
+  }, 5);
+  t.className = 'tb-alpha';
+  t.disabled = !on;
+  return [row('下地', h2(chk, c, h('span', null, '透明度'), t, '%'))];
 }
 
 // ---------------------------------------------------------------- 部品

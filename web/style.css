@@ -290,3 +290,5 @@ legend { padding: 0 4px 0 0; }
 .rich-menu .rich-swatch:hover { outline: 2px solid var(--accent, #2b6cb0); outline-offset: 1px; }
 /* 設定欄の「色」が、テキストの欄で選んだ部分の色を出しているとき */
 .in.part input[type=color] { outline: 2px solid var(--accent, #2b6cb0); outline-offset: 1px; }
+/* 下地の行：付けるか・色・透明度 */
+.in .tb-alpha { width: 4.5em; flex: none; }

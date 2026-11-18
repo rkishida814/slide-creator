@@ -105,7 +105,7 @@ slides:
 | | `crop: [左, 上, 右, 下]` | 元画像に対する割合（0〜1）。`[0.1, 0, 0.9, 1]` は左右10%ずつ切る |
 | | `fit: contain / cover / stretch` | contain は切らずに収める、cover は枠いっぱいにしてはみ出しを切る、stretch は伸ばす |
 | 文字 | `text: "1行目\n2行目"` | `font: {size, bold, italic, color, family, family_ja, glow}`（family は英語用、family_ja は日本語用のフォント。glow は文字の光彩で、`glow: true`（白・6 pt）か `glow: {color: "#ffffff", size: 6, opacity: 1}`。size は pt、opacity は 0〜1。PPTX では PowerPoint の「光彩」になる。画面・PDF は影を重ねた近似）、`line_height: 1.2`。文字の左に見出しアイコンを置くときは `icon: x.png`（高さは `icon_size` で pt。省くと文字の大きさ）。文字の一部の飾りは `<b>太字</b>` `<i>斜体</i>` `<sup>上付き</sup>` `<sub>下付き</sub>` `<color #C00000>色を付ける部分</color>` `<u>下線</u>` `<u double>二重線</u>` `<u img="line.png" w="2">画像の線</u>`（w は太さ。pt） `<size 18>大きさを変える部分</size>`（pt）（例：`mm<sup>2</sup>`）。段落の頭に `<li>` と書くと箇条書きになる（`<li hidden>` は「•」を描かない字下げだけの箇条書き）。画像の線は、PPTX では画面で測った位置に画像として置く（PPTX の行間は画面と同じポイントで書くので、PowerPoint でも同じ位置に来る。PowerPoint で文字を直しても線は動かない）。改行（`\n`）は段落の区切りで、`para_space`（pt）の間隔が足される。段落の中の改行は `<br>`（行間だけ） |
-| | `text_bg: "#FFF200"` / `text_bg: {color: "#ffffff", opacity: 0.6, margin: 0.2}` | 文字の下地。背景（ボックス全体）とは別に、文字の塊にぴったりの四角に色を敷く（左右は文字の幅、折り返す文字は枠の幅いっぱい）。opacity は不透明度（0〜1。画面の「下地の透明度」は % で、透明度 = 1 − opacity）、margin は文字の塊の外に広げる長さ（省くと文字の大きさの 0.15 倍）。PPTX では、テキストボックスを文字の塊＋margin の大きさにして塗りつぶし（透過性付き）、margin を内側の余白にする（文字の位置は画面と同じ）。引き継がない |
+| | `text_bg: {color: "#ffff00", opacity: 0.6}` | 文字の下地の色。opacity は不透明度（0〜1。画面の「透明度」は % で、透明度 = 1 − opacity）。PPTX ではテキストボックスの塗りつぶしになる |
 | 空き | 何も書かない（`{}` や `~`） | |
 
 どのノードにも書けるもの：
