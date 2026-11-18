@@ -561,9 +561,12 @@ function overlaps(q, r) {
   return q.x < r.x + r.w - e && q.x + q.w > r.x + e && q.y < r.y + r.h - e && q.y + q.h > r.y + e;
 }
 
-// 2 つのボックスを含む長方形を作り、その長方形にかかるボックスが入るまで広げる
+// 2 つのボックスを含む長方形を作り、その長方形にかかるボックスが入るまで広げる。
+// 広げる先は、2 つのボックスを両方含む、いちばん小さい組の中のボックスだけにする
+// （ほかの組のボックスが、固定長の合計が領域を超えるなどで少しはみ出して重なっていても、巻き込まない）
 function rectSelect(a, b) {
-  const leaves = curSlide().boxes.filter(isLeaf);
+  const lca = a.path === b.path ? a : commonAncestor([a, b]);
+  const leaves = curSlide().boxes.filter((l) => isLeaf(l) && (!lca || within(l, lca)));
   let r = unionRect([a.rect, b.rect]);
   for (let k = 0; k < 50; k++) {
     const inc = leaves.filter((l) => overlaps(l.rect, r));
