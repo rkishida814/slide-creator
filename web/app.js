@@ -1,7 +1,7 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc } from '../src/core/layout.js';
-import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
+import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, measureTextBgs, hasTextBg, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
 import { richToHTML, paragraphs, bulletType, underlineHTML } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, parseBox, isBgTree } from '../src/core/units.js';
@@ -2432,6 +2432,7 @@ function textFields(box, node, inh) {
     row('フォント（英語）', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
     row('フォント（日本語）', selectEl(JA_FONT_OPTS, f.family_ja ?? fi.family_ja ?? DEFAULT_FONT_JA, (v) => edit(box, ['font', 'family_ja'], v))),
     row('色', colorEl(f.color ?? fi.color, (v) => edit(box, ['font', 'color'], v || undefined))),
+    ...textBgRows(box, node, edit),
     row('見出しアイコン', h2(
       selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a.split('/').pop()])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined)),
       pickBtn((path) => edit(box, 'icon', path)),
@@ -2444,6 +2445,28 @@ function textFields(box, node, inh) {
   return fs;
 }
 
+
+// 文字の下地（text_bg）：色・透明度（%）・広がり（文字の塊の外に広げる長さ）。色を消すと下地を外す
+function textBgRows(box, node, edit) {
+  const raw = node.text_bg;
+  const cur = raw && typeof raw === 'object' ? plain(raw) : raw ? { color: String(raw) } : null;
+  const write = (patch) => {
+    const next = { ...(cur || {}), ...patch };
+    for (const k of Object.keys(next)) if (next[k] === undefined) delete next[k];
+    return edit(box, 'text_bg', next.color ? next : undefined);
+  };
+  const rows = [row('文字の下地', colorEl(cur?.color, (v) => (v ? write({ color: v }) : edit(box, 'text_bg', undefined))), '背景とは別に、文字の塊の下だけに敷く。PPTX ではテキストボックスの塗りつぶし')];
+  if (!cur?.color) return rows;
+  const t = Math.round((1 - Number(cur.opacity ?? 1)) * 100);
+  rows.push(
+    row('下地の透明度', h2(numEl(t, '', (v) => {
+      const x = Math.min(100, Math.max(0, +v || 0));
+      return write({ opacity: x ? Math.round((1 - x / 100) * 100) / 100 : undefined });
+    }, 5), '%')),
+    row('下地の広がり', h2(numEl(cur.margin ?? '', '自動', (v) => write({ margin: v === '' ? undefined : Math.max(0, +v || 0) }), 0.05), S.layout.unit), '文字の塊の外に広げる長さ。空欄なら文字の大きさの 0.15 倍'),
+  );
+  return rows;
+}
 
 // ---------------------------------------------------------------- 部品
 
@@ -3424,8 +3447,8 @@ async function exportPPTX() {
   if (!S.layout) return;
   try {
     status('PPTX を作成中…');
-    const underlines = await measureAllUnderlines();
-    const pres = await buildPPTX(window.PptxGenJS, S.layout, async (src) => ({ data: await blobToDataURL(await S.source.readBlob(src)) }), { underlines });
+    const { underlines, textBgs } = await measureForPPTX();
+    const pres = await buildPPTX(window.PptxGenJS, S.layout, async (src) => ({ data: await blobToDataURL(await S.source.readBlob(src)) }), { underlines, textBgs });
     const blob = await finishPPTX(pres, window.JSZip, 'blob');
     const name = `${S.source.name}.pptx`;
     if (S.source.writable) {
@@ -3440,9 +3463,12 @@ async function exportPPTX() {
   }
 }
 
-// 画像の線（<u img=…>）の位置を、隠した画面に全部のスライドを描いて測る（PPTX に画像として置くため）
-async function measureAllUnderlines() {
-  if (!hasImageUnderline(S.layout)) return [];
+// 画像の線（<u img=…>）の位置と、文字の下地の大きさを、隠した画面に全部のスライドを描いて測る
+// （画像の線は PPTX に画像として置き、下地はテキストボックスの大きさにする）
+async function measureForPPTX() {
+  const ul = hasImageUnderline(S.layout);
+  const tb = hasTextBg(S.layout);
+  if (!ul && !tb) return { underlines: [], textBgs: [] };
   const f = document.createElement('iframe');
   f.style.cssText = 'position:fixed;left:-30000px;top:0;width:3000px;height:2000px;border:0;visibility:hidden';
   document.body.append(f);
@@ -3452,7 +3478,10 @@ async function measureAllUnderlines() {
       f.srcdoc = renderHTML(S.layout, { srcURL: (src) => S.imageURLs.get(src) || '', waitFonts: true });
     });
     await loadUsedFonts(f.contentDocument);
-    return measureUnderlines(f.contentDocument, S.layout.width);
+    return {
+      underlines: ul ? measureUnderlines(f.contentDocument, S.layout.width) : [],
+      textBgs: tb ? measureTextBgs(f.contentDocument, S.layout.width) : [],
+    };
   } finally {
     f.remove();
   }

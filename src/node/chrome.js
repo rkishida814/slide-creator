@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import puppeteer from 'puppeteer-core';
-import { renderHTML, measureUnderlines } from '../core/html.js';
+import { renderHTML, measureUnderlines, measureTextBgs } from '../core/html.js';
 import { PER_INCH } from '../core/units.js';
 
 const CANDIDATES = [
@@ -116,9 +116,18 @@ export async function measureText(project) {
 
 // 画像の線（<u img=…>）の位置を測る（PPTX に画像として置くため）
 export async function measureProjectUnderlines(project) {
+  return (await measureProjectForPPTX(project, { underlines: true })).underlines;
+}
+
+// PPTX のために、画像の線の位置と文字の下地の大きさを、1 回描いて測る
+export async function measureProjectForPPTX(project, want) {
   const { browser, page } = await openProject(project, {});
+  const W = project.layout.width;
   try {
-    return await page.evaluate(`(${measureUnderlines.toString()})(document, ${project.layout.width})`);
+    return {
+      underlines: want.underlines ? await page.evaluate(`(${measureUnderlines.toString()})(document, ${W})`) : [],
+      textBgs: want.textBgs ? await page.evaluate(`(${measureTextBgs.toString()})(document, ${W})`) : [],
+    };
   } finally {
     await browser.close();
   }

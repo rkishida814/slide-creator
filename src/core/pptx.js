@@ -18,7 +18,8 @@ const hex = (c, fb) => {
  * @param PptxGen   pptxgenjs のクラス
  * @param layout    layoutDoc の結果
  * @param imageRef  (src) => { path } | { data: 'image/png;base64,...' }
- * @param opts      { underlines: measureUnderlines の結果（画像の線を、測った位置に画像として置く） }
+ * @param opts      { underlines: measureUnderlines の結果（画像の線を、測った位置に画像として置く）,
+ *                    textBgs: measureTextBgs の結果（文字の下地のあるテキストボックスを、測った文字の塊の大きさにする） }
  * @returns pptxgenjs のインスタンス（writeFile / write で書き出す）
  */
 export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
@@ -57,9 +58,16 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
         const f = e.font;
         const g = glowOf(f);
         const glow = g ? { color: hex(g.color, 'FFFFFF'), size: g.size, opacity: g.opacity } : undefined;
+        // 文字の下地：テキストボックスを、画面で測った文字の塊に下地の margin を足した大きさにし、塗りつぶす。
+        // margin はテキストボックスの内側の余白にするので、文字の位置は画面と同じ。測っていなければ、ボックス全体を塗る
+        const tb = e.text_bg;
+        const m = tb ? (opts.textBgs || []).find((x) => x.slide === s.id && x.path === e.path) : null;
+        const mg = tb && m ? tb.margin * k : 0;
+        const tbox = m ? { x: m.rect.x * k - mg, y: m.rect.y * k - mg, w: m.rect.w * k + 2 * mg, h: m.rect.h * k + 2 * mg } : box;
         slide.addText(textRuns(e.text, f, e.para_space, glow, f.size, e.line_height), {
           ...(glow ? { glow } : {}),
-          ...box,
+          ...tbox,
+          ...(tb ? { fill: { color: hex(tb.color, 'FFFF00'), transparency: Math.round((1 - tb.opacity) * 100) } } : {}),
           // 英語用と日本語用を「|」でつないで渡し、書き出した後で分ける（finishPPTX）
           fontFace: `${pptxFontName(f.family || DEFAULT_FONT)}|${pptxFontName(f.family_ja || DEFAULT_FONT_JA)}`,
           fontSize: f.size,
@@ -67,12 +75,12 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
           italic: !!f.italic,
           color: hex(f.color, '000000'),
           align: e.align,
-          valign: e.valign,
-          margin: 0,
+          valign: m ? 'top' : e.valign,
+          margin: Math.round(mg * 72 * 100) / 100, // pt
           // 行の間隔は、倍数ではなくポイントで決める（文字の大きさ × 行間）。PowerPoint の倍数は、フォント本来の行の高さに掛けるため、
           // 画面（文字の大きさ × 行間）より行の間隔が広くなり、行ごとに文字が下にずれる（画像の線などの位置が合わなくなる）
           lineSpacing: Math.round(f.size * e.line_height * 100) / 100,
-          wrap: true,
+          wrap: m ? m.wrap : true,
           fit: 'none',
           objectName: e.path,
         });

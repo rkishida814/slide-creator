@@ -279,7 +279,27 @@ function layoutText(node, rect, style, path, ctx) {
     valign,
     line_height: lineHeight,
     para_space: style.para_space ?? 0,
+    text_bg: textBg(node, font, path, ctx),
   });
+}
+
+// 文字の下地（text_bg）。文字の塊にぴったりの四角に、色を敷く（背景とは別。PPTX ではテキストボックスの塗りつぶし）。
+// "#RRGGBB" か {color, opacity（0〜1）, margin（文字の塊の外に広げる長さ。省くと文字の大きさの 0.15 倍）}。無ければ null
+function textBg(node, font, path, ctx) {
+  const tb = node && typeof node === 'object' ? node.text_bg : null;
+  if (!tb) return null;
+  const o = typeof tb === 'string' ? { color: tb } : tb;
+  if (!o.color) return null;
+  const opacity = Math.min(1, Math.max(0, Number(o.opacity ?? 1)));
+  let margin = (font.size * 0.15 * perInch(ctx.unit)) / 72;
+  if (o.margin != null) {
+    try {
+      margin = Math.max(0, toUnit(o.margin, ctx.unit));
+    } catch (e) {
+      ctx.issues.push({ level: 'error', path, msg: `text_bg の margin が読めない: ${o.margin}` });
+    }
+  }
+  return { color: String(o.color), opacity: Number.isFinite(opacity) ? opacity : 1, margin };
 }
 
 function checkAlign(align, valign, path, ctx) {

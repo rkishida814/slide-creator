@@ -39,13 +39,16 @@ export function glowOf(f) {
   return { color: o.color ?? '#ffffff', size: Number(o.size ?? 6), opacity: Number(o.opacity ?? 1) };
 }
 
+// 色に不透明度を付けた CSS の色（#RRGGBB 以外はそのまま）
+function rgba(c0, opacity, fallback) {
+  const c = color(c0, fallback);
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(c);
+  return m ? `rgba(${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)},${opacity})` : c;
+}
+
 // 光彩を CSS の text-shadow で近似する（ぼかしの小さい影を重ねて濃くし、外側を半径 size までぼかす）
 function glowCSS(g) {
-  const c = color(g.color, '#ffffff');
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(c);
-  const col = m
-    ? `rgba(${parseInt(m[1].slice(0, 2), 16)},${parseInt(m[1].slice(2, 4), 16)},${parseInt(m[1].slice(4, 6), 16)},${g.opacity})`
-    : c;
+  const col = rgba(g.color, g.opacity, '#ffffff');
   const r = g.size;
   return [0.12, 0.12, 0.2, 0.2, 0.3, 0.3, 0.45, 0.65, 1].map((b) => `0 0 ${(r * b).toFixed(2)}pt ${col}`).join(',');
 }
@@ -118,6 +121,8 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .img img { position: absolute; display: block; max-width: none; }
 .txt { display: flex; flex-direction: column; overflow: visible; }
 .txt > div { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 文字の下地：文字の塊の幅に縮め（折り返す文字は枠の幅いっぱい）、外側に margin の分だけ広げる（広げた分は影で描き、文字の位置を変えない） */
+.txt > div.tb { max-width: 100%; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .txt .j { font-family: var(--ja); }
 /* 箇条書き：行頭に「•」。折り返した行は文字の頭に揃える */
 .pa.li { position: relative; padding-left: 1.1em; }
@@ -175,7 +180,11 @@ function renderElement(e, L, opts) {
     const paras = paragraphs(e.text)
       .map((p, i) => `<div class="pa${{ normal: ' li', hidden: ' li lih' }[bulletType(p)] || ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br>', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
       .join('');
-    return `<div ${data} class="txt" style="${st}"><div>${paras}</div></div>`;
+    const tb = e.text_bg;
+    const tbAttr = tb
+      ? ` class="tb" style="align-self:${{ left: 'flex-start', center: 'center', right: 'flex-end' }[e.align] || 'stretch'};background:${rgba(tb.color, tb.opacity, '#ffff00')};box-shadow:0 0 0 ${L(tb.margin)} ${rgba(tb.color, tb.opacity, '#ffff00')}"`
+      : '';
+    return `<div ${data} class="txt" style="${st}"><div${tbAttr}>${paras}</div></div>`;
   }
   return '';
 }
@@ -201,6 +210,29 @@ export function measureUnderlines(doc, width) {
     }
   }
   return out;
+}
+
+// 文字の下地（text_bg）の四角を、描いた HTML から測る（PPTX では、テキストボックスをこの大きさにして塗りつぶす）。
+// rect は文字の塊（下地の margin を含まない）。wrap は、文字が枠の幅いっぱいで折り返しているか（していなければ PPTX で折り返さない）。
+// Chrome（puppeteer）の中でも動かすので、この関数の外のものを使わない
+export function measureTextBgs(doc, width) {
+  const out = [];
+  for (const sec of doc.querySelectorAll('section.slide')) {
+    const sr = sec.getBoundingClientRect();
+    const k = width / sr.width;
+    const slide = sec.id.replace(/^slide-/, '');
+    for (const tb of sec.querySelectorAll('.txt > div.tb')) {
+      const box = tb.parentElement;
+      const r = tb.getBoundingClientRect();
+      const full = r.width >= box.clientWidth - 0.5;
+      out.push({ slide, path: box.dataset.path, rect: { x: (r.left - sr.left) * k, y: (r.top - sr.top) * k, w: r.width * k, h: r.height * k }, wrap: full });
+    }
+  }
+  return out;
+}
+
+export function hasTextBg(layout) {
+  return layout.slides.some((s) => s.elements.some((e) => e.type === 'text' && e.text_bg));
 }
 
 // 文書の中に画像の線があるか（無ければ測らない）

@@ -96,6 +96,7 @@ export function importLayout(sub, opts) {
     if (o.border) o.border = { ...o.border, width: r2((o.border.width ?? 1) * k) };
     if (o.font) o.font = fontOf(o.font);
     if (o.para_space != null) o.para_space = r2(o.para_space * k);
+    if (o.text_bg && typeof o.text_bg === 'object' && o.text_bg.margin != null) o.text_bg = { ...o.text_bg, margin: len(o.text_bg.margin) };
     if (o.padding != null) o.padding = boxOf(o.padding);
     if (o.gap != null) o.gap = boxOf(o.gap);
     if (Array.isArray(o.ratio)) o.ratio = o.ratio.map((x) => (typeof x === 'number' ? x : lenStr(x)));
