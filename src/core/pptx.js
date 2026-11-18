@@ -57,7 +57,7 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
         const f = e.font;
         const g = glowOf(f);
         const glow = g ? { color: hex(g.color, 'FFFFFF'), size: g.size, opacity: g.opacity } : undefined;
-        slide.addText(textRuns(e.text, f, e.para_space, glow, f.size), {
+        slide.addText(textRuns(e.text, f, e.para_space, glow, f.size, e.line_height), {
           ...(glow ? { glow } : {}),
           ...box,
           // 英語用と日本語用を「|」でつないで渡し、書き出した後で分ける（finishPPTX）
@@ -69,7 +69,9 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
           align: e.align,
           valign: e.valign,
           margin: 0,
-          lineSpacingMultiple: e.line_height,
+          // 行の間隔は、倍数ではなくポイントで決める（文字の大きさ × 行間）。PowerPoint の倍数は、フォント本来の行の高さに掛けるため、
+          // 画面（文字の大きさ × 行間）より行の間隔が広くなり、行ごとに文字が下にずれる（画像の線などの位置が合わなくなる）
+          lineSpacing: Math.round(f.size * e.line_height * 100) / 100,
           wrap: true,
           fit: 'none',
           objectName: e.path,
@@ -86,7 +88,7 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
 
 // 飾りも改行も無い文字はそのまま。あれば、区切り（run）の配列にする
 // 箇条書きの段落は、行頭に「•」を付け、折り返した行を文字の頭に揃える（字下げは文字の大きさの 1.1 倍。画面と同じ）
-function textRuns(text, f, paraSpace, glow, size = 24) {
+function textRuns(text, f, paraSpace, glow, size = 24, lineHeight = 1.2) {
   if (!hasRich(text)) return glow ? [{ text, options: { glow } }] : text;
   const runs = [];
   const paras = paragraphs(text);
@@ -114,6 +116,9 @@ function textRuns(text, f, paraSpace, glow, size = 24) {
     if (soft) runs.push({ text: '', options: { softBreakBefore: true } });
     if (runs.length === start) runs.push({ text: '', options: {} }); // 空の段落
     if (pi > 0 && paraSpace > 0) runs[start].options.paraSpaceBefore = paraSpace;
+    // 一部の文字の大きさを変えた段落は、いちばん大きい文字に合わせて行の間隔を決める（画面と同じ）
+    const big = Math.max(0, ...parseRich(p).map((g) => g.size || 0));
+    if (big > size) for (let i = start; i < runs.length; i++) runs[i].options.lineSpacing = Math.round(big * lineHeight * 100) / 100;
     // 不可視の箇条書きは、行頭の記号を空白（見えない文字）にして、字下げだけを残す
     const bt = bulletType(p);
     if (bt) runs[start].options.bullet = { indent: Math.round(size * 1.1 * 10) / 10, ...(bt === 'hidden' ? { characterCode: '00A0' } : {}) };
