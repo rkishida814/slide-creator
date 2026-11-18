@@ -912,33 +912,53 @@ function transposeSplit(lca, range = null) {
   const nodes = sub ? allNodes.slice(range.i0, range.i1 + 1) : allNodes;
   const n = kids.length;
   const ok = ['split', 'ratio', 'children', 'gap', 'id', 'split_below'];
-  let m = null;
+  const unit = S.layout.unit;
+  const plainSplit = (nd) => nd && typeof nd === 'object' && nd.split === P && Array.isArray(nd.children) && !Object.entries(nd).some(([x, v]) => v != null && !ok.includes(x));
+  // 部分 nd（ボックス b）の中身を、同じ向きの入れ子の組を開いて 1 列に並べる。[{ node, box, ratio }]。開けなければ null
+  // 例：[見出し, [見出し, 空き]] → [見出し, 見出し, 空き]（入れ子の比率は、この列の比率 1 あたりの長さで直す）
+  const flat = (nd, b, g0) => {
+    const sb = slide.boxes.filter((x) => x.parent === b.path);
+    if (sb.length !== nd.children.length) return null;
+    const sr = Array.isArray(nd.ratio) && nd.ratio.length === sb.length ? nd.ratio : Array(sb.length).fill(1);
+    let k = null;
+    sb.forEach((x, j) => {
+      if (k == null && typeof sr[j] === 'number' && sr[j] > 0) k = L(x) / sr[j];
+    });
+    const out = [];
+    for (let j = 0; j < sb.length; j++) {
+      const c = nd.children[j];
+      if (plainSplit(c) && Math.abs(toUnit(c.gap ?? 0, unit) - g0) <= 1e-6) {
+        const inner = flat(c, sb[j], g0);
+        if (!inner) return null;
+        for (const e of inner) out.push({ ...e, ratio: typeof e.ratio === 'string' ? e.ratio : k ? round4(L(e.box) / k) : `${round4(L(e.box))}${unit}` });
+      } else out.push({ node: c, box: sb[j], ratio: sr[j] });
+    }
+    return out;
+  };
   let gap0 = null;
-  const subs = [];
+  const flats = [];
   for (let i = 0; i < n; i++) {
     const nd = nodes[i];
-    if (!nd || typeof nd !== 'object' || nd.split !== P || !Array.isArray(nd.children)) return null;
-    if (Object.entries(nd).some(([x, v]) => v != null && !ok.includes(x))) return null;
-    const g = toUnit(nd.gap ?? 0, S.layout.unit);
-    if (m == null) {
-      m = nd.children.length;
-      gap0 = g;
-    }
-    if (nd.children.length !== m || Math.abs(g - gap0) > 1e-6) return null;
-    const sb = slide.boxes.filter((b) => b.parent === kids[i].path);
-    if (sb.length !== m) return null;
-    subs.push(sb);
+    if (!plainSplit(nd)) return null;
+    const g = toUnit(nd.gap ?? 0, unit);
+    if (gap0 == null) gap0 = g;
+    if (Math.abs(g - gap0) > 1e-6) return null;
+    const f = flat(nd, kids[i], g);
+    if (!f) return null;
+    flats.push(f);
   }
-  if (!m || m < 2) return null;
+  const m = flats[0]?.length;
+  if (!m || m < 2 || flats.some((f) => f.length !== m)) return null;
   // 分かれ目の位置がそろっていること
-  for (let i = 1; i < n; i++) for (let j = 0; j < m; j++) if (Math.abs(L(subs[i][j]) - L(subs[0][j])) > 0.02) return null;
-  const r0 = Array.isArray(nodes[0].ratio) && nodes[0].ratio.length === m ? nodes[0].ratio : null;
+  for (let i = 1; i < n; i++) for (let j = 0; j < m; j++) if (Math.abs(L(flats[i][j].box) - L(flats[0][j].box)) > 0.02) return null;
+  const opened = flats.some((f, i) => f.length !== nodes[i].children.length);
+  const r0 = opened ? flats[0].map((e) => e.ratio) : Array.isArray(nodes[0].ratio) && nodes[0].ratio.length === m ? nodes[0].ratio : null;
   const bandRatio = sub ? (allRatio || Array(N).fill(1)).slice(range.i0, range.i1 + 1) : allRatio;
   const bands = Array.from({ length: m }, (_, j) => ({
     split: D,
     ...(bandRatio ? { ratio: bandRatio } : {}),
     ...(lca.node.gap != null ? { gap: lca.node.gap } : {}),
-    children: nodes.map((nd) => nd.children[j]),
+    children: flats.map((f) => f[j].node),
   }));
   const content = { split: P, ...(r0 ? { ratio: r0 } : {}), ...(nodes[0].gap != null ? { gap: nodes[0].gap } : {}), children: bands };
   if (sub) {
