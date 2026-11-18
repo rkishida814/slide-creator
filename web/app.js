@@ -556,8 +556,10 @@ function unionRect(rs) {
   return { x, y, w: x2 - x, h: y2 - y };
 }
 
+// 2 つの長方形が重なるか。固定長の合計が枠を少し超えて、隣のボックスとわずかに重なることがあるので、
+// スライドの幅の 0.05% 未満の重なりは、重なりとみなさない（端のボックスを含めて選ぶと、下の空きまで巻き込んでいた）
 function overlaps(q, r) {
-  const e = 1e-6;
+  const e = Math.max(1e-6, (S.layout?.width || 0) * 0.0005);
   return q.x < r.x + r.w - e && q.x + q.w > r.x + e && q.y < r.y + r.h - e && q.y + q.h > r.y + e;
 }
 
@@ -567,15 +569,16 @@ function overlaps(q, r) {
 function rectSelect(a, b) {
   const lca = a.path === b.path ? a : commonAncestor([a, b]);
   const leaves = curSlide().boxes.filter((l) => isLeaf(l) && (!lca || within(l, lca)));
+  const hits = overlaps;
   let r = unionRect([a.rect, b.rect]);
   for (let k = 0; k < 50; k++) {
-    const inc = leaves.filter((l) => overlaps(l.rect, r));
+    const inc = leaves.filter((l) => hits(l.rect, r));
     const r2 = unionRect(inc.map((l) => l.rect));
     const same = Math.abs(r2.x - r.x) + Math.abs(r2.y - r.y) + Math.abs(r2.w - r.w) + Math.abs(r2.h - r.h) < 1e-6;
     r = r2;
     if (same) return { rect: r, leaves: inc };
   }
-  return { rect: r, leaves: leaves.filter((l) => overlaps(l.rect, r)) };
+  return { rect: r, leaves: leaves.filter((l) => hits(l.rect, r)) };
 }
 
 function selectionRect() {
