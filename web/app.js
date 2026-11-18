@@ -887,18 +887,27 @@ function splitEntries(lca, selSet, opts = {}) {
 // 例：[CA の上下の組, PCA の上下の組, ZPCA の上下の組] を左右に並べたもの
 //   → [上段（CA・PCA・ZPCA を左右に）, 下段（下の空き 3 つを左右に）] を上下に並べたもの。見た目は変わらない
 // 組み替えられないときは null を返す
-function transposeSplit(lca) {
+// range（{ i0, i1 }）を渡すと、i0〜i1 番目の部分だけを 1 つの組にまとめて組み替え、ほかの部分はそのまま残す
+// 例：[見出しの左右の組, 画像の左右の組, 文章] の上 2 段だけを、[左の列（見出し・画像）, 右の列] にする
+function transposeSplit(lca, range = null) {
   if (!lca || lca.kind !== 'split' || !lca.src) return null;
   const D = lca.node.split;
   const P = D === 'rows' ? 'cols' : 'rows';
   const L = (b) => (P === 'rows' ? b.rect.h : b.rect.w);
   const slide = curSlide();
-  const kids = slide.boxes.filter((b) => b.parent === lca.path);
-  const n = kids.length;
+  const allKids = slide.boxes.filter((b) => b.parent === lca.path);
+  const N = allKids.length;
   const { file, path, mode } = lca.src;
   const doc = S.files[file].doc;
   const written = mode === 'direct' ? getJS(doc, [...path, 'children']) : null;
-  const nodes = Array.isArray(written) && written.length === n ? written : plain(lca.node.children || []);
+  const allNodes = Array.isArray(written) && written.length === N ? written : plain(lca.node.children || []);
+  if (allNodes.length !== N) return null;
+  const allRatio = Array.isArray(lca.node.ratio) && lca.node.ratio.length === N ? plain(lca.node.ratio) : null;
+  const sub = range && (range.i0 > 0 || range.i1 < N - 1);
+  if (sub && (range.i0 < 0 || range.i1 >= N || range.i1 - range.i0 < 1)) return null;
+  const kids = sub ? allKids.slice(range.i0, range.i1 + 1) : allKids;
+  const nodes = sub ? allNodes.slice(range.i0, range.i1 + 1) : allNodes;
+  const n = kids.length;
   const ok = ['split', 'ratio', 'children', 'gap', 'id', 'split_below'];
   let m = null;
   let gap0 = null;
@@ -921,13 +930,31 @@ function transposeSplit(lca) {
   // 分かれ目の位置がそろっていること
   for (let i = 1; i < n; i++) for (let j = 0; j < m; j++) if (Math.abs(L(subs[i][j]) - L(subs[0][j])) > 0.02) return null;
   const r0 = Array.isArray(nodes[0].ratio) && nodes[0].ratio.length === m ? nodes[0].ratio : null;
+  const bandRatio = sub ? (allRatio || Array(N).fill(1)).slice(range.i0, range.i1 + 1) : allRatio;
   const bands = Array.from({ length: m }, (_, j) => ({
     split: D,
-    ...(Array.isArray(lca.node.ratio) ? { ratio: plain(lca.node.ratio) } : {}),
+    ...(bandRatio ? { ratio: bandRatio } : {}),
     ...(lca.node.gap != null ? { gap: lca.node.gap } : {}),
     children: nodes.map((nd) => nd.children[j]),
   }));
   const content = { split: P, ...(r0 ? { ratio: r0 } : {}), ...(nodes[0].gap != null ? { gap: nodes[0].gap } : {}), children: bands };
+  if (sub) {
+    // 組み替えた組を、まとめた部分の位置に置く。組の長さは、まとめた部分の比率の和（長さで書いた部分があれば、いまの長さ）
+    const u = S.layout.unit;
+    const LD = (b) => (D === 'rows' ? b.rect.h : b.rect.w);
+    const gap = toUnit(lca.node.gap ?? 0, u);
+    const rr = allRatio || Array(N).fill(1);
+    const part = rr.slice(range.i0, range.i1 + 1);
+    const merged = part.every((x) => typeof x === 'number')
+      ? round4(part.reduce((a, x) => a + x, 0))
+      : `${round4(kids.reduce((a, b) => a + LD(b), 0) + gap * (n - 1))}${u}`;
+    const children = [...allNodes.slice(0, range.i0), content, ...allNodes.slice(range.i1 + 1)];
+    const ratio = [...rr.slice(0, range.i0), merged, ...rr.slice(range.i1 + 1)];
+    keepOneFlexible(ratio, range.i0);
+    setProp(doc, path, 'children', children);
+    setProp(doc, path, 'ratio', ratio);
+    return fileChanged(file);
+  }
   if (mode === 'direct') {
     const cur = getJS(doc, path) || {};
     const keep = Object.fromEntries(Object.entries(cur).filter(([x]) => !CONTENT_KEYS.includes(x) && x !== 'gap'));
@@ -943,10 +970,12 @@ function transposeSplit(lca) {
 // 選んだ範囲がそのままでは扱えないとき、並びを組み替えてから、同じ範囲を選び直して fn をやり直す
 function retryAfterTranspose(lca, fn) {
   const r = selectionRect();
-  const done = transposeSplit(lca);
+  // 全部の部分を組み替えられなければ、選んだ範囲にかかる部分だけを組み替える
+  const hit = r && lca ? curSlide().boxes.filter((b) => b.parent === lca.path).map((b, i) => (overlaps(b.rect, r) ? i : -1)).filter((i) => i >= 0) : [];
+  const done = transposeSplit(lca) || (hit.length >= 2 ? transposeSplit(lca, { i0: hit[0], i1: hit[hit.length - 1] }) : null);
   if (!done) return null;
   return done.then(() => {
-    const e = 1e-6;
+    const e = 0.02; // 組み替えで長さを丸めた分のずれを許す（transposeSplit の判定と同じ）
     const inside = curSlide().boxes.filter((b) => isLeaf(b) && b.rect.x >= r.x - e && b.rect.y >= r.y - e && b.rect.x + b.rect.w <= r.x + r.w + e && b.rect.y + b.rect.h <= r.y + r.h + e);
     setSel(inside.map((b) => b.path));
     applyView();
