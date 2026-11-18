@@ -3789,10 +3789,47 @@ function onKey(e) {
     pasteSelection();
     return;
   }
+  if ((e.key === 'Backspace' || e.key === 'Delete') && !mod && (S.sel || []).length && S.layer !== 'bg') {
+    e.preventDefault();
+    clearSelection();
+    return;
+  }
   if (e.key === 'Escape') {
     if (S.layer === 'bg' && !(S.sel || []).length) return exitBgEdit();
     select(null);
   }
+}
+
+// 選んだボックス（複数も）の中身を消して、空のテキストボックスにする。ボックスの大きさ・余白・背景・枠線・文字の設定は残す
+const CLEAR_KEYS = ['image', 'crop', 'fit', 'split', 'children', 'ratio', 'gap', 'grid', 'items', 'icon', 'icon_size', 'text_bg', 'from_layout'];
+function clearSelection() {
+  const slide = curSlide();
+  const leaves = [...new Set((S.sel || []).map(findBox).filter(Boolean).flatMap((b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b))))];
+  const targets = leaves.filter((b) => b.src && !(b.kind === 'text' && String(b.node?.text ?? '') === ''));
+  if (!targets.length) return;
+  const files = new Set();
+  for (const b of targets) {
+    const { file, path, mode } = b.src;
+    const doc = S.files[file].doc;
+    if (mode === 'direct') {
+      let cur = getJS(doc, path);
+      if (typeof cur === 'string') cur = {};
+      const keep = cur && typeof cur === 'object' ? Object.fromEntries(Object.entries(cur).filter(([k]) => !CLEAR_KEYS.includes(k) && k !== 'text')) : {};
+      replaceNode(doc, path, { ...keep, text: '' });
+    } else {
+      // 型の値を打ち消すため、ほかの種類の中身は null にする
+      for (const k of CLEAR_KEYS) setProp(doc, path, k, null);
+      setProp(doc, path, 'text', '');
+    }
+    files.add(file);
+  }
+  const sel = S.sel;
+  return Promise.all([...files].map((f) => fileChanged(f))).then(() => {
+    setSel(sel.filter((p) => findBox(p)));
+    applyView();
+    renderProps();
+    status(targets.length > 1 ? `${targets.length} 個のボックスを空にしました` : 'ボックスを空にしました');
+  });
 }
 
 // 選択中のボックスを分割する（分割数と、上下か左右かを選ぶ）
