@@ -3281,6 +3281,19 @@ function bgHostOf(b) {
   return b;
 }
 
+// b か、その外側のうち、背景が付いているいちばん内側のボックス（どこにも無ければ b）。
+// 背景モードで開くのはこのボックス。例：背景を付けたボックスに文字を入れて、文字の下に余白のボックスができたとき、
+// 文字のボックスではなく、外側の背景を開く
+function bgOwnerOf(b) {
+  const has = (x) => {
+    const bg = x?.node?.background;
+    // 中身の無い背景（{}。内部の印 __src などだけのもの）は、背景なしとみなす
+    return bg != null && !(typeof bg === 'object' && !Array.isArray(bg) && !Object.keys(bg).some((k) => !k.startsWith('__')));
+  };
+  for (let x = b; x; x = x.parent ? findReal(x.parent) : null) if (has(x)) return x;
+  return b;
+}
+
 // クリックした点で選ぶもの
 //   主レイヤー：いちばん内側のボックス
 //   背景：いま開いている背景の枠。その外なら、クリックしたボックス（背景を開き直す）
@@ -3310,6 +3323,7 @@ async function setLayer(v) {
     let host = null;
     if (prevSel.length) host = prev === 'block' ? blockOf(prevSel[0]) : prevSel.length === 1 ? prevSel[0] : commonAncestor(prevSel);
     host = host && findReal(host.path);
+    if (host) host = bgOwnerOf(host);
     if (host && host.src?.mode === 'direct') return enterBgHost(host);
   }
   if (v === 'block') {
@@ -3407,7 +3421,9 @@ async function exitBgEdit() {
 }
 
 // 背景で、別のボックスをクリックしたとき：いまの背景を閉じ、そのボックスの背景を開いて、クリックした位置の枠を選ぶ
+// 開くのは、クリックしたボックスか、その外側のうち、背景が付いているいちばん内側のボックス（bgOwnerOf）
 async function switchBgHost(box, pt) {
+  box = bgOwnerOf(box);
   const path = box.path;
   if (box.src?.mode !== 'direct') return status('テンプレートの一部のボックスは、背景を分けられません。', true);
   if (S.bgEdit) await leaveBgHost('bg', []);
