@@ -6,4 +6,4 @@
 |---|---|---|---|
 | pptxgen.bundle.js | PptxGenJS（JSZip を含む） | 4.0.1（JSZip 3.10.2） | MIT（LICENSE.pptxgenjs）、JSZip は MIT または GPLv3 から MIT を選択（LICENSE.jszip.md） |
 | yaml/ | yaml | 2.9.1 | ISC（LICENSE.yaml） |
-| heic2any.min.js | heic2any（HEIC の写真を JPEG に変える。HEIC を使うときだけ読み込む） | 0.0.4 | MIT（LICENSE.heic2any.md） |
+| heic-to.js | heic-to（HEIC の写真を JPEG に変える。中の libheif は 1.23.7。HEIC を使うときだけ読み込む） | 1.6.7 | LGPL-3.0（LICENSE.heic-to）。ビルドせずにそのまま同梱しているので、差し替えられる |

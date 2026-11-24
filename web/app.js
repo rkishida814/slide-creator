@@ -2547,11 +2547,28 @@ function gridFields(box, node) {
   return fs;
 }
 
+// 画像の選択肢：フォルダの画像と、JPEG に変えていない HEIC（選ぶと JPEG に変えて使う）
+function imageOpts(cur) {
+  const heics = (S.heics || []).filter((x) => !S.assets.includes(heicJpegPath(x)));
+  return [
+    ...[...new Set([...S.assets, ...(cur ? [String(cur)] : [])])].map((a) => [a, a.split('/').pop()]),
+    ...heics.map((a) => [a, `${a.split('/').pop()}（選ぶと JPEG に変える）`]),
+  ];
+}
+// 選んだ画像が HEIC なら JPEG に変えて、その場所を渡す
+function withImage(v, fn) {
+  if (!HEIC_RE.test(v)) return fn(v);
+  return useHeic(v).then((p) => {
+    status(S.pickMsg || '');
+    return fn(p);
+  }, (e) => status(`HEIC の写真を読めません: ${e.message || e}`, true));
+}
+
 function imageFields(box, node, inh) {
   const fs = fieldset(null);
-  const opts = [...new Set([...S.assets, String(node.image)])].map((a) => [a, a.split('/').pop()]);
+  const opts = imageOpts(node.image);
   const srcIn = h2(
-    selectEl(opts, String(node.image), (v) => edit(box, 'image', v)),
+    selectEl(opts, String(node.image), (v) => withImage(v, (p) => edit(box, 'image', p))),
     pickBtn((path) => edit(box, 'image', path)),
   );
   const el = S.layout && curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
@@ -2799,17 +2816,17 @@ async function pickImageFile() {
   return path;
 }
 
-// HEIC の写真を JPEG に変える。変換のライブラリ（heic2any）は、初めて使うときに読み込む
+// HEIC の写真を JPEG に変える。変換のライブラリ（heic-to。中の libheif が新しく、最近の iPhone の写真も読める）は、初めて使うときに読み込む
 let heicLib = null;
 function heicToJpeg(blob) {
   heicLib ||= new Promise((res, rej) => {
     const sc = document.createElement('script');
-    sc.src = 'vendor/heic2any.min.js';
-    sc.onload = () => res(window.heic2any);
+    sc.src = 'vendor/heic-to.js';
+    sc.onload = () => res(window.HeicTo);
     sc.onerror = () => rej(new Error('変換のライブラリを読み込めません'));
     document.head.append(sc);
   });
-  return heicLib.then((f) => f({ blob, toType: 'image/jpeg', quality: 0.92 })).then((r) => (Array.isArray(r) ? r[0] : r));
+  return heicLib.then((f) => f({ blob, type: 'image/jpeg', quality: 0.92 }));
 }
 
 // フォルダの HEIC を JPEG に変えて、隣に「名前_heic.jpg」として入れ、その場所を返す（すでにあれば、それを使う）
@@ -4010,8 +4027,8 @@ function bgRows(cur, write, opts = {}) {
   ];
   if (kind === 'color') rows.push(row('色', colorEl(typeof cur === 'string' ? cur : cur.color, (v) => write(v || undefined))));
   if (kind === 'image') {
-    const opts = [...new Set([...S.assets, cur.image])].map((a) => [a, a.split('/').pop()]);
-    rows.push(row('画像', h2(selectEl(opts, cur.image, (v) => write({ ...cur, image: v })), pickBtn((path) => write({ ...cur, image: path })))));
+    const opts = imageOpts(cur.image);
+    rows.push(row('画像', h2(selectEl(opts, cur.image, (v) => withImage(v, (p) => write({ ...cur, image: p }))), pickBtn((path) => write({ ...cur, image: path })))));
     rows.push(row('広げ方', selectEl(BG_MODE_OPTS, cur.mode === 'cover' ? 'cover' : 'stretch', (v) => {
       const { mode: _m, tile: _t, ...rest } = cur;
       write(v === 'cover' ? { ...rest, mode: v } : rest);
