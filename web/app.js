@@ -2794,7 +2794,7 @@ async function pickImageFile() {
     // 同じ名前で中身も同じなら、写さずにそのまま使う
     const old = await S.source.readBlob(path);
     if (old.size === file.size && (await old.arrayBuffer().then((a) => new Uint8Array(a).join())) === (await file.arrayBuffer().then((a) => new Uint8Array(a).join()))) {
-      S.pickMsg = `${path} を使います`;
+      S.pickMsg = ''; // すでにフォルダにある画像なので、知らせることは無い
       return path;
     }
     path = `${m[1]}_${k}${m[2] || ''}`;
