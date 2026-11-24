@@ -18,17 +18,19 @@ function openImageCrop(b) {
   return cropDialog(b, b.node, el);
 }
 // プレビューの外（サポートパネルなど）を押したのが、直前のプレビューのクリックと同じ位置ですぐ後なら、ダブルクリックとして扱う
-document.addEventListener('mousedown', (e) => {
+function dblFromLast(e) {
   const c = S.lastClick;
-  if (!c || e.button !== 0) return;
-  if (Date.now() - c.t > 500 || Math.hypot(e.screenX - c.x, e.screenY - c.y) > 6) return;
+  if (!c || e.button !== 0) return false;
+  if (Date.now() - c.t > 500 || Math.hypot(e.screenX - c.x, e.screenY - c.y) > 6) return false;
   S.lastClick = null;
   const b = c.path && findBox(c.path);
-  if (!b || (b.node || {}).image == null || S.layer !== 'main') return;
+  if (!b || (b.node || {}).image == null || S.layer !== 'main') return false;
   e.preventDefault();
   e.stopPropagation();
   openImageCrop(b);
-}, true);
+  return true;
+}
+document.addEventListener('mousedown', dblFromLast, true);
 
 // HEIC（iPhone の写真）。layout.yaml には HEIC のまま書く。ブラウザでは表示できないので、プレビューと書き出しのときだけメモリの中で JPEG に変える（フォルダには何も書かない）
 const HEIC_RE = /\.(heic|heif)$/i;
@@ -269,7 +271,34 @@ function renderPreview() {
     frame.blur();
     window.focus();
   }
+  showShield(frame);
   frame.srcdoc = html;
+}
+
+// プレビューを作り直しているあいだのクリックは、どこにも届かずに捨てられる。
+// ダブルクリックの 2 回目がそこに当たっても受けられるように、透明な覆いを置く（作り直したら外す）
+let shieldTimer = null;
+function showShield(frame) {
+  let sh = $('#frame-shield');
+  if (!sh) {
+    sh = h('div');
+    sh.id = 'frame-shield';
+    Object.assign(sh.style, { position: 'fixed', zIndex: 40, background: 'transparent' });
+    sh.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      if (dblFromLast(e)) hideShield();
+    });
+    document.body.append(sh);
+  }
+  const r = frame.getBoundingClientRect();
+  Object.assign(sh.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.width}px`, height: `${r.height}px`, display: 'block' });
+  clearTimeout(shieldTimer);
+  shieldTimer = setTimeout(hideShield, 3000);
+}
+function hideShield() {
+  clearTimeout(shieldTimer);
+  const sh = $('#frame-shield');
+  if (sh) sh.style.display = 'none';
 }
 
 // 選択。1 つならその枠の設定、2 つ以上なら比率と背景を出す
@@ -293,6 +322,7 @@ function setZoom(z) {
 }
 
 function setupFrame() {
+  hideShield();
   const frame = $('#frame');
   const doc = frame.contentDocument;
   const sec = doc?.querySelector('section.slide');
@@ -389,6 +419,22 @@ function setupFrame() {
       dragged = false;
       return;
     }
+    // ダブルクリック：画像のあるボックスなら、画像を見ながらトリミングする画面を開く。
+    // 1 回目のクリックで描き直される（書いていた文字を書き込むなど）と、ブラウザの dblclick は届かないので、
+    // 直前のクリックの時刻と位置を覚えておき、それと比べて決める。書いている文字の中に文字があるときは、ふつうの語の選択にする
+    if (S.layer === 'main') {
+      const inEd0 = S.inline && S.inline.ed.contains(e.target);
+      const c = S.lastClick;
+      S.lastClick = { t: Date.now(), x: e.screenX, y: e.screenY, path: inEd0 ? S.inline.path : pickAt(e)?.path || null };
+      if (c && c.path && Date.now() - c.t < 500 && Math.hypot(e.screenX - c.x, e.screenY - c.y) < 6 && !(inEd0 && S.inline.ed.textContent.trim())) {
+        const cb = findBox(c.path);
+        if (cb && (cb.node || {}).image != null) {
+          S.lastClick = null;
+          downInEd = false;
+          return openImageCrop(cb);
+        }
+      }
+    }
     // 書いている文字の中（カーソルはそのまま）。文字の中で押してボックスの外まで選んで離したときも、ほかのボックスを選ばない
     if (downInEd || (S.inline && S.inline.ed.contains(e.target))) {
       downInEd = false;
@@ -407,22 +453,9 @@ function setupFrame() {
       const owner = r ? bgOwnerOf(bgHostOf(r)) : null;
       if (owner && owner.path !== S.bgEdit && hasOwnBg(owner)) return switchBgHost(owner, canvasPoint(e));
     }
-    // 1 回目のクリックで出たサポートパネルが 2 回目のクリックの位置に重なっても、ダブルクリックとして扱えるように覚えておく
-    S.lastClick = { t: Date.now(), x: e.screenX, y: e.screenY, path: b ? b.path : null };
     select(b ? b.path : null);
     // ボックスを選んだら、そのまま書けるようにする（クリックした位置にカーソルを置く）
     if (b && S.layer === 'main') startInline({ point: { x: e.clientX, y: e.clientY } });
-  });
-  // 画像のあるボックスをダブルクリックしたら、画像を見ながらトリミングする画面を開く。
-  // 画像のボックスには文字を書く欄が重なっていて、1 回目のクリックでそこが書く状態になる。欄に文字があるときだけ、ふつうの語の選択にする
-  doc.addEventListener('dblclick', (e) => {
-    if (S.layer !== 'main') return;
-    const inEd = S.inline && S.inline.ed.contains(e.target);
-    if (inEd && S.inline.ed.textContent.trim()) return;
-    const b = inEd ? findBox(S.inline.path) : pickAt(e);
-    if (!b || (b.node || {}).image == null) return;
-    e.preventDefault();
-    openImageCrop(b);
   });
   doc.addEventListener('keydown', onKey);
   applyView();
