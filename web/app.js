@@ -503,11 +503,13 @@ function fitBoxHeight(box, need, minRest, dry = false) {
     if (dry) return { h };
     const ratio = [...ratio0];
     ratio[i] = `${h}${u}`;
+    S.mergeHist = true;
     return edit(parent, 'ratio', ratio);
   }
   // 余りが 0.5 cm に満たないときは分けない
   if (box.rect.h - need < minRest) return;
   if (dry) return { h: need };
+  S.mergeHist = true;
   const { file, path: ypath, mode } = box.src;
   const ydoc = S.files[file].doc;
   let pn = writtenNode(box);
@@ -781,6 +783,13 @@ function snapshot() {
 }
 
 function pushHistory() {
+  // 自動でボックスを文字の高さに合わせた書き換えは、きっかけになった変更と合わせて 1 回として記録する（⌘Z 1 回で両方戻る）
+  if (S.mergeHist && S.histI > 0 && S.histI === S.hist.length - 1) {
+    S.mergeHist = false;
+    S.hist[S.histI] = snapshot();
+    return;
+  }
+  S.mergeHist = false;
   S.hist = (S.hist || []).slice(0, (S.histI ?? -1) + 1);
   S.hist.push(snapshot());
   if (S.hist.length > 300) S.hist.shift();
@@ -4731,8 +4740,19 @@ function onKey(e) {
     return;
   }
   const tag = (e.target.tagName || '').toLowerCase();
-  if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
   const mod = e.metaKey || e.ctrlKey;
+  // ⌘Z・⌘⇧Z：文字を打つ欄で、打ちかけ（まだ書き込んでいない）なら、その欄の中の取り消しにする。
+  // それ以外（選択肢・チェック・色・ボタン、打ちかけでない欄）では、アプリの「元に戻す」「やり直す」にする
+  if (mod && (e.code === 'KeyZ' || e.code === 'KeyY') && !e.target.isContentEditable) {
+    const typing = (tag === 'textarea' || (tag === 'input' && /^(text|number|search|url|email|tel|password|)$/.test(e.target.type || ''))) && e.target.value !== e.target.dataset.v0;
+    if (typing) return;
+    e.preventDefault();
+    e.target.blur?.();
+    if (e.shiftKey || e.code === 'KeyY') redo();
+    else undo();
+    return;
+  }
+  if (['input', 'textarea', 'select'].includes(tag) || e.target.isContentEditable) return;
   if (mod && (e.code === 'KeyZ' || e.code === 'KeyY')) {
     e.preventDefault();
     if (e.shiftKey || e.code === 'KeyY') redo();
@@ -4846,6 +4866,13 @@ $('#chk-outline').onchange = (e) => {
   renderPreview();
 };
 document.addEventListener('keydown', onKey);
+// 文字を打つ欄の、カーソルを入れた時点（または書き込んだ時点）の値。⌘Z で、打ちかけかどうかを見分ける
+document.addEventListener('focusin', (e) => {
+  if (e.target.matches?.('input, textarea')) e.target.dataset.v0 = e.target.value;
+});
+document.addEventListener('change', (e) => {
+  if (e.target.matches?.('input, textarea')) e.target.dataset.v0 = e.target.value;
+});
 window.addEventListener('resize', () => applyView());
 window.addEventListener('beforeunload', (e) => {
   if (anyDirty()) e.preventDefault();
