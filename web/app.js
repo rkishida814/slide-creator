@@ -16,6 +16,8 @@ const IMAGE_RE = /\.(png|jpe?g|gif|svg|webp)$/i;
 const HEIC_RE = /\.(heic|heif)$/i;
 
 const S = {
+  typeQueue: [], // ボックスを合わせて描き直すあいだに打った文字
+  fitPending: false,
   source: null,
   files: {}, // 'layout.yaml' / 'templates/x.yaml' → { text, doc, dirty }
   assets: [],
@@ -392,6 +394,7 @@ function setupFrame() {
     S.inline = null;
   }
   if (S.support && S.layer === 'main') startInline(rs && rs.path === S.support.path ? { pos: rs.pos, focus: rs.focus } : { focus: false });
+  if (S.fitPending) releaseFit();
   // 文字の高さに合わせ直すボックスを、1 つずつ処理する（書き換えると描き直され、ここに戻って次を処理する）
   while (S.pendingFit && S.pendingFit.length) {
     const p = S.pendingFit.shift();
@@ -401,11 +404,13 @@ function setupFrame() {
 
 // テキストのボックスを文字の高さに合わせ、下に余った部分を別のボックス（空き）にする。
 // すでにそうしてあれば（上下の分割で、このボックスの高さが長さで決まっていて、すぐ下が空きのボックス）、高さだけ合わせ直す
-function fitTextBelow(path, doc) {
+// dry：書き換えずに、合わせる必要があるかだけを調べる（要るなら { h：文字のボックスの新しい高さ }）。
+// 書いている途中の文字（まだ書き込んでいない）で調べるので、空のボックスも対象にする
+function fitTextBelow(path, doc, dry = false) {
   const box = findBox(path);
-  if (!box || box.kind !== 'text' || !box.src) return;
+  if (!box || !box.src || !(box.kind === 'text' || (dry && box.kind === 'empty'))) return;
   const node = box.node || {};
-  if (node.split_below === false || !String(node.text ?? '').trim()) return;
+  if (node.split_below === false || (!dry && !String(node.text ?? '').trim())) return;
   const v = box.style?.valign || 'top';
   if (v !== 'top') return; // 中央・下に揃えた文字は、下に余白を作らない
   const el = [...doc.querySelectorAll('.txt')].find((x) => x.dataset.path === path);
@@ -414,7 +419,7 @@ function fitTextBelow(path, doc) {
   const textH = el.firstElementChild.getBoundingClientRect().height / (S.ppu * S.view.s);
   const pad = parseBox(node.padding ?? defaultPadding('text'), u);
   const need = Math.ceil((textH + pad.t + pad.b) * 100) / 100;
-  return fitBoxHeight(box, need, toUnit('0.5cm', u));
+  return fitBoxHeight(box, need, toUnit('0.5cm', u), dry);
 }
 
 // 画像のボックスの高さを、表示している画像の高さ（余白を含む）まで縮め、下に余った部分を別のボックス（空き）にする
@@ -470,7 +475,7 @@ function fitImageBelow(box) {
 
 // ボックスの高さを need にする。すでに上下の分割で高さが長さで決まり、すぐ下が空きなら、高さだけ合わせ直す。
 // そうでなければ、上下に分けて下を空きにする（余りが minRest に満たないときは分けない）
-function fitBoxHeight(box, need, minRest) {
+function fitBoxHeight(box, need, minRest, dry = false) {
   const u = S.layout.unit;
   const path = box.path;
   const len = `${need}${u}`;
@@ -485,12 +490,14 @@ function fitBoxHeight(box, need, minRest) {
     const avail = box.rect.h + sibs[i + 1].rect.h;
     const h = Math.min(need, Math.floor(avail * 0.95 * 100) / 100);
     if (Math.abs(toUnit(ratio0[i], u) - h) < 0.01) return;
+    if (dry) return { h };
     const ratio = [...ratio0];
     ratio[i] = `${h}${u}`;
     return edit(parent, 'ratio', ratio);
   }
   // 余りが 0.5 cm に満たないときは分けない
   if (box.rect.h - need < minRest) return;
+  if (dry) return { h: need };
   const { file, path: ypath, mode } = box.src;
   const ydoc = S.files[file].doc;
   let pn = writtenNode(box);
@@ -3276,6 +3283,14 @@ function textCtl(opts, onCommit) {
     // 日本語入力の変換中は書き込まない（描き直すと変換中の文字が壊れる）。確定したときに書き込む
     if (!ed.imeHooked) {
       ed.imeHooked = true;
+      // ボックスを合わせて描き直すあいだに打った文字は、書く欄に入れずに覚えておき、描き直したあとに入れる
+      ed.addEventListener('beforeinput', (e) => {
+        if (!S.fitPending || composing || e.isComposing) return;
+        if (e.inputType === 'insertText' && e.data) S.typeQueue.push(['text', e.data]);
+        else if (e.inputType === 'insertParagraph') S.typeQueue.push(['para']);
+        else return;
+        e.preventDefault();
+      });
       ed.addEventListener('compositionstart', () => {
         composing = true;
         clearTimeout(timer);
@@ -3283,12 +3298,19 @@ function textCtl(opts, onCommit) {
       ed.addEventListener('compositionend', () => {
         composing = false;
         clearTimeout(timer);
-        timer = setTimeout(commit, 300);
+        timer = setTimeout(commit, 0);
       });
     }
+    // 打つたびに、ボックスの高さを変える必要（下の余白を別のボックスにする・高さを合わせ直す）があるかを測り、
+    // あれば、その場で書き込んで合わせる。無ければ、手を止めたときにまとめて書き込む
     ed.oninput = (e) => {
       clearTimeout(timer);
-      if (composing || e.isComposing) return;
+      if (composing || e.isComposing) return opts.onComposing?.();
+      if (!S.fitPending && opts.needsFit?.()) {
+        S.fitPending = true; // 描き直し終わるまでに打った文字は、待たせておく（描き直すと消えるため）
+        setTimeout(() => S.fitPending && releaseFit(), 2000); // 描き直しが終わらなかったときも、打った文字を失わない
+        return commit();
+      }
       timer = setTimeout(() => !composing && commit(), 600);
     };
     ed.onblur = commit;
@@ -3366,7 +3388,18 @@ function offsetsIn(ed) {
     x.setEnd(node, o);
     return x.toString().length;
   };
-  return { start: off(r.startContainer, r.startOffset), end: off(r.endContainer, r.endOffset) };
+  // 何段落目の何文字目か（空の段落にカーソルがあるときも、その段落に戻せるように）
+  const para = (node, o) => {
+    let p = node;
+    while (p && p.parentNode !== ed) p = p.parentNode;
+    if (!p) return null;
+    const x = ed.ownerDocument.createRange();
+    x.setStart(p, 0);
+    x.setEnd(node, o);
+    const i = [...ed.children].indexOf(p); // 段落は要素（div）。要素でなければ、段落の中の位置は使わない
+    return i < 0 ? null : [i, x.toString().length];
+  };
+  return { start: off(r.startContainer, r.startOffset), end: off(r.endContainer, r.endOffset), ps: para(r.startContainer, r.startOffset), pe: para(r.endContainer, r.endOffset) };
 }
 function rangeAt(ed, pos) {
   const D = ed.ownerDocument;
@@ -3380,7 +3413,28 @@ function rangeAt(ed, pos) {
     }
     return last ? [last, last.nodeValue.length] : [ed.lastElementChild || ed, 0];
   };
+  // 段落の中の位置で戻す（段落の数が同じときだけ。違えば、全体の何文字目かで戻す）
+  const inPara = (pp) => {
+    const p = pp && ed.children[pp[0]];
+    if (!p) return null;
+    const w = D.createTreeWalker(p, NodeFilter.SHOW_TEXT);
+    let n = pp[1];
+    let last = null;
+    for (let t = w.nextNode(); t; t = w.nextNode()) {
+      if (n <= t.nodeValue.length) return [t, n];
+      n -= t.nodeValue.length;
+      last = t;
+    }
+    return last ? [last, last.nodeValue.length] : [p, 0];
+  };
   const r = D.createRange();
+  const a = pos.ps && inPara(pos.ps);
+  const b = pos.pe && inPara(pos.pe);
+  if (a && b) {
+    r.setStart(...a);
+    r.setEnd(...b);
+    return r;
+  }
   r.setStart(...at(pos.start, pos.start < pos.end));
   r.setEnd(...at(pos.end, false));
   return r;
@@ -3430,6 +3484,16 @@ function placeCaret(ed, how) {
     D.getSelection().addRange(r);
   }
   positionSupport(); // カーソルの位置に合わせてパネルを置く（ボックスが大きいとき）
+}
+
+// ボックスを合わせ終えた（描き直した）。待たせていた文字を、書いている欄に入れる
+function releaseFit() {
+  S.fitPending = false;
+  const q = S.typeQueue.splice(0);
+  const ed = S.inline?.ed;
+  if (!ed || !q.length) return;
+  const D = ed.ownerDocument;
+  for (const [k, v] of q) D.execCommand(k === 'para' ? 'insertParagraph' : 'insertText', false, v);
 }
 
 // 書くのを終える。書いた文字を書き込み、プレビューを描き直して、文字の高さにボックスを合わせる
@@ -3548,6 +3612,30 @@ function buildSupport(box) {
     onBaseSize: (n) => set(['font', 'size'], n),
     onBoxColor: (c) => set(['font', 'color'], c || undefined),
     onBoxToggle: (k) => set(['font', k], font()[k] ? undefined : true),
+    // 書いている文字で、ボックスの高さを変える必要があるか
+    needsFit: () => {
+      const inl = S.inline;
+      return !!(inl && inl.path === path && inl.ed.textContent.trim() && fitTextBelow(path, inl.ed.ownerDocument, true));
+    },
+    // 日本語入力の変換中：描き直すと変換中の文字が壊れるので、書き込まずに、分けたあとの形を枠の線だけで先に見せる
+    onComposing: () => {
+      const inl = S.inline;
+      if (!inl || inl.path !== path || !inl.ed.textContent.trim()) return;
+      const plan = fitTextBelow(path, inl.ed.ownerDocument, true);
+      const b = cur();
+      if (!plan || !b) return;
+      placeIn(frameEl('sel'), { ...b.rect, h: plan.h });
+      const sec = inl.ed.ownerDocument.querySelector('section.slide');
+      let rest = sec?.querySelector('.fit-rest');
+      if (sec && !rest) {
+        rest = inl.ed.ownerDocument.createElement('div');
+        rest.className = 'fit-rest';
+        sec.append(rest);
+      }
+      const s = S.view?.s || 1;
+      placeIn(rest, { x: b.rect.x, y: b.rect.y + plan.h, w: b.rect.w, h: Math.max(0, b.rect.h - plan.h) });
+      if (rest) Object.assign(rest.style, { position: 'absolute', pointerEvents: 'none', outline: `${1 / s}px dashed rgba(220, 0, 80, .8)` });
+    },
   }, (v) => {
     const b = cur();
     if (!b) return;
@@ -3561,7 +3649,9 @@ function buildSupport(box) {
     // 書いている途中でも（手を止めて書き込んだとき）、ボックスを文字の高さに合わせ、下に余った部分を別のボックスにする
     Promise.resolve(done).then(() => {
       const inl = S.inline;
-      if (inl && inl.path === b.path && findBox(b.path)?.kind === 'text') fitTextBelow(b.path, inl.ed.ownerDocument);
+      const r = inl && inl.path === b.path && findBox(b.path)?.kind === 'text' ? fitTextBelow(b.path, inl.ed.ownerDocument) : null;
+      // 合わせなかった（描き直さない）ときは、待たせていた文字をすぐ入れる。合わせたときは、描き直したあとに入れる
+      if (!r) releaseFit();
     });
   });
   // 光彩（文字の周りをぼかした色で縁取る）。押すと付ける・外す
