@@ -286,13 +286,18 @@ function setupFrame() {
   // ⌘（cmd。Windows では Ctrl）を押しながらドラッグすると、離した先のボックスと中身を入れ替える
   let drag = null;
   let dragged = false;
+  let downInEd = false; // 書いている文字の中で押した（文字をドラッグで選んでいる）
   doc.addEventListener('mousedown', (e) => {
+    downInEd = false;
     // 設定欄の入力欄にカーソルが残っていると、⌘Z がその欄の「元に戻す」になり、ボックスの操作が戻らない。プレビューを押したら外す
     const ae = document.activeElement;
     if (ae && ae !== document.body && ae !== frame) ae.blur();
     if (e.button !== 0) return;
     // 書いている文字の中を押したら、ふつうの文字の選択（ドラッグで範囲を選ぶ）にする
-    if (S.inline && S.inline.ed.contains(e.target)) return;
+    if (S.inline && S.inline.ed.contains(e.target)) {
+      downInEd = true;
+      return;
+    }
     // 背景では、いま開いている背景の枠だけをドラッグで選ぶ（別のボックスはクリックで開く）
     const b = S.layer === 'bg' ? leafAt(e) : pickAt(e);
     if (!b) return;
@@ -352,7 +357,11 @@ function setupFrame() {
       dragged = false;
       return;
     }
-    if (S.inline && S.inline.ed.contains(e.target)) return; // 書いている文字の中（カーソルはそのまま）
+    // 書いている文字の中（カーソルはそのまま）。文字の中で押してボックスの外まで選んで離したときも、ほかのボックスを選ばない
+    if (downInEd || (S.inline && S.inline.ed.contains(e.target))) {
+      downInEd = false;
+      return;
+    }
     const b = pickAt(e);
     if (S.layer === 'block') {
       setSel(b ? blockLeafPaths(b) : []);
@@ -498,7 +507,9 @@ function fitBoxHeight(box, need, minRest) {
     setProp(ydoc, ypath, 'ratio', [len, 1]);
     setProp(ydoc, ypath, 'children', children);
   }
-  // 選択は、文字の入ったボックス（分けた上側）に移す（複数選んでいるときは、そのボックスだけを置き換える）
+  // 選択は、文字の入ったボックス（分けた上側）に移す（複数選んでいるときは、そのボックスだけを置き換える）。
+  // 書いている途中なら、書く欄も上側に移す（描き直したあと、同じ位置にカーソルを戻す）
+  if (S.inline?.path === path) S.inline.path = `${path}.0`;
   setSel((S.sel || []).map((x) => (x === path ? `${path}.0` : x)));
   return fileChanged(file);
 }
@@ -2926,6 +2937,8 @@ function textCtl(opts, onCommit) {
     saved = sel.getRangeAt(0).cloneRange();
     if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
     tellSel();
+    // パネルをカーソルの右に置いているときは、カーソルが動いたら追いかける
+    if (S.support?.atCaret) requestAnimationFrame(positionSupport);
   };
   // 範囲 r の最初の文字に付いている一部の色（"#RRGGBB"）。付いていなければ null
   const colorAt = (r) => {
@@ -3400,6 +3413,7 @@ function placeCaret(ed, how) {
     D.getSelection().removeAllRanges();
     D.getSelection().addRange(r);
   }
+  positionSupport(); // カーソルの位置に合わせてパネルを置く（ボックスが大きいとき）
 }
 
 // 書くのを終える。書いた文字を書き込み、プレビューを描き直して、文字の高さにボックスを合わせる
@@ -3460,9 +3474,35 @@ function positionSupport() {
     [bx + bw + m, clampY(by)],
     [bx - pw - m, clampY(by)],
   ];
-  const [x, y] = cands.find(([cx, cy]) => fits(cx, cy)) || [clampX(bx), clampY(by - ph - m)];
+  let pos = cands.find(([cx, cy]) => fits(cx, cy));
+  sp.atCaret = !pos;
+  if (!pos) {
+    // ボックスの外に入る場所が無い（ボックスが大きい）ときは、カーソルの右に置く。右に入らなければ、カーソルの行の下に置く
+    const c = caretRect(fr);
+    const cx = c ? c.right : bx;
+    const cy = c ? c.top : by;
+    const ch = c ? c.height : 0;
+    if (cx + 24 + pw <= fr.right) pos = [cx + 24, clampY(cy + ch / 2 - 20)];
+    else pos = [clampX(cx - 20), cy + ch + m + ph <= fr.bottom ? cy + ch + m : clampY(cy - ph - m)];
+  }
+  const [x, y] = pos;
   sp.el.style.left = `${Math.round(x)}px`;
   sp.el.style.top = `${Math.round(y)}px`;
+}
+
+// 書いている文字のカーソルの位置（画面の座標）。書いていなければ null
+function caretRect(fr) {
+  const ed = S.inline?.ed;
+  if (!ed) return null;
+  const sel = ed.ownerDocument.getSelection();
+  let r = null;
+  if (sel.rangeCount && ed.contains(sel.getRangeAt(0).endContainer)) {
+    const rg = sel.getRangeAt(0).cloneRange();
+    rg.collapse(false);
+    r = rg.getClientRects()[0] || (rg.endContainer.nodeType === 1 ? rg.endContainer.getBoundingClientRect() : rg.endContainer.parentElement?.getBoundingClientRect());
+  }
+  r ||= ed.getBoundingClientRect();
+  return { right: fr.left + r.right, top: fr.top + r.top, height: r.height };
 }
 
 function buildSupport(box) {
@@ -3498,7 +3538,12 @@ function buildSupport(box) {
       S.inlineDirty = true;
     }
     const empty = !v.replace(/<[^>]*>/g, '').trim() && !/<li/.test(v);
-    editOne(b, 'text', empty && b.kind !== 'text' ? undefined : v);
+    const done = editOne(b, 'text', empty && b.kind !== 'text' ? undefined : v);
+    // 書いている途中でも（手を止めて書き込んだとき）、ボックスを文字の高さに合わせ、下に余った部分を別のボックスにする
+    Promise.resolve(done).then(() => {
+      const inl = S.inline;
+      if (inl && inl.path === b.path && findBox(b.path)?.kind === 'text') fitTextBelow(b.path, inl.ed.ownerDocument);
+    });
   });
   // 光彩（文字の周りをぼかした色で縁取る）。押すと付ける・外す
   const glowBtn = h('button', 'rich-btn rich-glow');
