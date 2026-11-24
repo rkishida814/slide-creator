@@ -12,6 +12,8 @@ import { importLayout, placeImported, joinPath, dirOf } from '../src/core/import
 
 const $ = (s) => document.querySelector(s);
 const IMAGE_RE = /\.(png|jpe?g|gif|svg|webp)$/i;
+// HEIC（iPhone の写真）。ブラウザでは表示できないので、使うときに JPEG に変えてフォルダに入れる
+const HEIC_RE = /\.(heic|heif)$/i;
 
 const S = {
   source: null,
@@ -55,6 +57,7 @@ async function openSource(source) {
     pushHistory();
     const all = await source.list('');
     S.assets = all.filter((f) => IMAGE_RE.test(f) && !f.startsWith('out/'));
+    S.heics = all.filter((f) => HEIC_RE.test(f) && !f.startsWith('out/'));
     S.importSigs = null;
     S.layoutFiles = all.filter((f) => /\/layout\.ya?ml$/.test(f) && !/(^|\/)(out|templates)\//.test(f));
     S.imageSizes.clear();
@@ -111,7 +114,16 @@ async function loadImage(src) {
 }
 
 // YAML → 展開 → 配置計算 → 表示
+// ボックスの配置と画像の並び。これが変わった書き込みでは、書いている途中でもプレビューを描き直す
+function layoutSig() {
+  const s = realSlide();
+  if (!s) return '';
+  const r = (x) => [x.x, x.y, x.w, x.h].map((v) => v.toFixed(2)).join(',');
+  return [...s.boxes.map((b) => `${b.path}:${b.kind}:${r(b.rect)}`), ...s.elements.filter((e) => e.type !== 'text').map((e) => `${e.type}:${e.path}:${r(e.rect)}`)].join('|');
+}
+
 async function rebuild() {
+  const sig0 = layoutSig();
   try {
     const templates = {};
     for (const [name, f] of Object.entries(S.files)) {
@@ -138,11 +150,12 @@ async function rebuild() {
   if ((S.sel || []).some((x) => !findBox(x))) setSel([]);
   status(S.error || '', !!S.error);
   renderSlideTabs();
-  if (S.skipPreview) {
-    // プレビューに直接書いている途中の書き込み。描き直すと書く欄が作り直されるので、描き直さない（書き終えたときに描き直す）
-    S.skipPreview = false;
-    syncSupport();
-  } else renderPreview();
+  // プレビューに直接書いている途中の書き込み。描き直すと書く欄が作り直されるので、描き直さない（書き終えたときに描き直す）。
+  // ただし、ほかの書き込み（余白のボックスを作るなど）と重なってボックスの配置が変わったときは描き直す
+  const skip = S.skipPreview && layoutSig() === sig0;
+  S.skipPreview = false;
+  if (skip) syncSupport();
+  else renderPreview();
   renderProps();
   $('#btn-save').disabled = !anyDirty();
 }
@@ -2710,14 +2723,26 @@ async function pickImageFile() {
   }
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = 'image/png,image/jpeg,image/gif,image/svg+xml,image/webp';
-  const file = await new Promise((res) => {
+  input.accept = 'image/png,image/jpeg,image/gif,image/svg+xml,image/webp,image/heic,image/heif,.heic,.heif';
+  let file = await new Promise((res) => {
     input.onchange = () => res(input.files[0] || null);
     input.addEventListener('cancel', () => res(null));
     input.click();
   });
   if (!file) return null;
-  const name = file.name.replace(/[\\/:*?"<>|]/g, '_');
+  let name = file.name.replace(/[\\/:*?"<>|]/g, '_');
+  if (HEIC_RE.test(name)) {
+    // HEIC は JPEG に変えてから入れる（名前の拡張子も .jpg にする）
+    try {
+      status('HEIC の写真を JPEG に変えています…');
+      file = await heicToJpeg(file);
+      status('');
+    } catch (e) {
+      status(`HEIC の写真を読めません: ${e.message || e}`, true);
+      return null;
+    }
+    name = name.replace(HEIC_RE, '.jpg');
+  }
   const m = name.match(/^(.*?)(\.[^.]+)?$/);
   let path = name;
   for (let k = 1; await S.source.exists(path); k++) {
@@ -2738,6 +2763,54 @@ async function pickImageFile() {
   if (!S.assets.includes(path)) S.assets.push(path);
   S.pickMsg = `画像 ${path} をフォルダに入れました`;
   return path;
+}
+
+// HEIC の写真を JPEG に変える。変換のライブラリ（heic2any）は、初めて使うときに読み込む
+let heicLib = null;
+function heicToJpeg(blob) {
+  heicLib ||= new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = 'vendor/heic2any.min.js';
+    sc.onload = () => res(window.heic2any);
+    sc.onerror = () => rej(new Error('変換のライブラリを読み込めません'));
+    document.head.append(sc);
+  });
+  return heicLib.then((f) => f({ blob, toType: 'image/jpeg', quality: 0.92 })).then((r) => (Array.isArray(r) ? r[0] : r));
+}
+
+// フォルダの HEIC を JPEG に変えて、隣に「名前_heic.jpg」として入れ、その場所を返す（すでにあれば、それを使う）
+function heicJpegPath(path) {
+  return path.replace(HEIC_RE, '_heic.jpg');
+}
+async function useHeic(path) {
+  const out = heicJpegPath(path);
+  if (!(await S.source.exists(out))) {
+    status(`${path.split('/').pop()} を JPEG に変えています…`);
+    const jpg = await heicToJpeg(await S.source.readBlob(path));
+    await S.source.writeFile(out, jpg);
+  }
+  if (!S.assets.includes(out)) S.assets.push(out);
+  S.pickMsg = `${path.split('/').pop()} を JPEG に変えて ${out} として使います`;
+  return out;
+}
+
+// ▾ のメニューが画面の下にはみ出すときは、上に開く。上にも入りきらなければ、広いほうに開いてスクロールできるようにする
+function fitMenu(menu) {
+  menu.style.top = menu.style.bottom = menu.style.maxHeight = menu.style.overflowY = '';
+  const r = menu.getBoundingClientRect();
+  const below = innerHeight - r.top - 8;
+  if (r.height <= below) return;
+  const host = menu.offsetParent?.getBoundingClientRect();
+  const above = host ? host.top - 8 : 0;
+  if (above > below) {
+    menu.style.top = 'auto';
+    menu.style.bottom = '100%';
+  }
+  const room = Math.max(above, below);
+  if (r.height > room) {
+    menu.style.maxHeight = `${Math.max(120, room)}px`;
+    menu.style.overflowY = 'auto';
+  }
 }
 
 // 文字の書式の道具（サポートパネルの書式のボタンと、文字を書く欄の操作）。
@@ -2809,6 +2882,7 @@ function textCtl(opts, onCommit) {
         menu.innerHTML = '';
         build(menu, close);
         menu.hidden = false;
+        fitMenu(menu);
       }
     });
     menus.push(menu);
@@ -3474,7 +3548,21 @@ function buildSupport(box) {
     const list = h('div', 'rich-imgs');
     imgMenu.append(list);
     const imgs = [...new Set(S.assets)];
-    if (!imgs.length) list.append(h('div', 'note', 'フォルダに画像がありません'));
+    // HEIC は、JPEG に変えたものがまだ無いものだけ出す（選ぶと JPEG に変えて使う）
+    const heics = (S.heics || []).filter((x) => !S.assets.includes(heicJpegPath(x)));
+    if (!imgs.length && !heics.length) list.append(h('div', 'note', 'フォルダに画像がありません'));
+    for (const a of heics) {
+      const b = h('button', 'rich-btn rich-item rich-thumb');
+      b.type = 'button';
+      b.title = `${a}（選ぶと JPEG に変えて使います）`;
+      b.append(h('span', 'heic-mark', 'HEIC'), h('span', 'name', a.split('/').pop()));
+      b.onmousedown = (ev) => {
+        ev.preventDefault();
+        imgMenu.hidden = true;
+        useHeic(a).then(setImage, (e) => status(`HEIC の写真を読めません: ${e.message || e}`, true));
+      };
+      list.append(b);
+    }
     Promise.all(imgs.map(loadImage)).then(() => {
       for (const a of imgs) {
         if (!S.imageURLs.get(a)) continue;
@@ -3490,8 +3578,10 @@ function buildSupport(box) {
         };
         list.append(b);
       }
+      fitMenu(imgMenu);
     });
     imgMenu.hidden = false;
+    fitMenu(imgMenu);
   };
   imgWrap.append(imgBtn, imgMenu);
   ctl.bar.append(h('span', 'rich-sep'), glowBtn, imgWrap);
