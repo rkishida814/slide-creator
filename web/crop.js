@@ -1,9 +1,9 @@
 // トリミング画面。元画像の上で範囲を動かし、[左, 上, 右, 下]（0〜1）を返す。
-// 戻り値：配列（適用）/ 'clear'（外す）/ null（取り消し）
+// 戻り値：{ crop: 配列 | 'clear'（外す）, fit: 収め方 }（適用・外す）/ null（取り消し）
 const $ = (s) => document.querySelector(s);
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
-export function openCrop({ src, url, natural, crop, cellAspect, lockDefault }) {
+export function openCrop({ src, url, natural, crop, cellAspect, lockDefault, fit, fitOpts }) {
   const dlg = $('#crop-dialog');
   const img = $('#crop-img');
   const rectEl = $('#crop-rect');
@@ -11,6 +11,17 @@ export function openCrop({ src, url, natural, crop, cellAspect, lockDefault }) {
   const values = $('#crop-values');
   $('#crop-src').textContent = `${src}（${natural.w} × ${natural.h} px）`;
   lock.checked = !!lockDefault;
+  // 収め方（切らずに全体を収める など）。この画面の中でも選べる
+  const fitSel = $('#crop-fit');
+  fitSel.replaceChildren(...(fitOpts || []).map(([v, t]) => new Option(t, v)));
+  fitSel.value = fit || '';
+  fitSel.parentElement.hidden = !fitOpts;
+  fitSel.onchange = () => {
+    // はみ出た部分を切る収め方では、範囲をボックスの縦横比に合わせる
+    lock.checked = fitSel.value === 'cover';
+    applyLock(null);
+    draw();
+  };
   let [l, t, r, b] = crop;
 
   // 枠の縦横比（px の比）を、割合の空間での比に直す：(幅の割合 × W) / (高さの割合 × H) = cellAspect
@@ -129,8 +140,8 @@ export function openCrop({ src, url, natural, crop, cellAspect, lockDefault }) {
       const v = dlg.returnValue;
       if (v === 'ok') {
         const full = l <= 0.0005 && t <= 0.0005 && r >= 0.9995 && b >= 0.9995;
-        resolve(full ? 'clear' : [r3(l), r3(t), r3(r), r3(b)]);
-      } else if (v === 'clear') resolve('clear');
+        resolve({ crop: full ? 'clear' : [r3(l), r3(t), r3(r), r3(b)], fit: fitSel.value });
+      } else if (v === 'clear') resolve({ crop: 'clear', fit: fitSel.value });
       else resolve(null);
     };
   });

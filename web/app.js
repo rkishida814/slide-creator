@@ -393,6 +393,15 @@ function setupFrame() {
     // ボックスを選んだら、そのまま書けるようにする（クリックした位置にカーソルを置く）
     if (b && S.layer === 'main') startInline({ point: { x: e.clientX, y: e.clientY } });
   });
+  // 画像のあるボックスをダブルクリックしたら、画像を見ながらトリミングする画面を開く（書いている文字の中は、ふつうの語の選択）
+  doc.addEventListener('dblclick', (e) => {
+    if (S.layer !== 'main' || (S.inline && S.inline.ed.contains(e.target))) return;
+    const b = pickAt(e);
+    if (!b || (b.node || {}).image == null) return;
+    e.preventDefault();
+    const el = curSlide().elements.find((x) => x.path === b.path && x.type === 'image');
+    cropDialog(b, b.node, el);
+  });
   doc.addEventListener('keydown', onKey);
   applyView();
   measureOverflow(doc);
@@ -2676,9 +2685,13 @@ async function cropDialog(box, node, el) {
     crop: node.crop || [0, 0, 1, 1],
     cellAspect: cell.w / cell.h,
     lockDefault: (node.fit ?? box.inherited?.fit) === 'cover',
+    fit: node.fit ?? box.inherited?.fit ?? 'contain',
+    fitOpts: FIT_OPTS,
   });
-  if (result === 'clear') return edit(box, 'crop', undefined);
-  if (Array.isArray(result)) return edit(box, 'crop', result);
+  if (!result) return;
+  const pairs = [['crop', result.crop === 'clear' ? undefined : result.crop]];
+  if (result.fit !== (node.fit ?? box.inherited?.fit ?? 'contain')) pairs.push(['fit', result.fit]);
+  return editMany(box, pairs);
 }
 
 function wrapWhole(text, f) {
@@ -4046,9 +4059,18 @@ function bgRows(cur, write, opts = {}) {
         crop,
         cellAspect: r && r.h > 0 ? r.w / r.h : nat.w / nat.h,
         lockDefault: base.mode === 'cover',
+        fit: base.mode === 'cover' ? 'cover' : 'stretch',
+        fitOpts: BG_MODE_OPTS,
       });
-      if (result === 'clear') return setCrop(null);
-      if (Array.isArray(result)) return setCrop(result);
+      if (!result) return;
+      const curFit = base.mode === 'cover' ? 'cover' : 'stretch';
+      const { crop: _c, ...keep } = base;
+      let next = keep;
+      if (result.fit !== curFit) {
+        const { mode: _m, tile: _t, ...rest } = keep;
+        next = result.fit === 'cover' ? { ...rest, mode: 'cover' } : rest;
+      }
+      return write(result.crop === 'clear' ? next : { ...next, crop: result.crop });
     }));
     if (base.crop) acts.append(btn('トリミングを外す', () => setCrop(null)));
     rows.push(acts);
