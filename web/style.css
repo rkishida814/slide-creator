@@ -297,7 +297,7 @@ legend { padding: 0 4px 0 0; }
 .support-head .grip { letter-spacing: -2px; }
 .support .rich-bar { margin-bottom: 4px; }
 .support-more summary { cursor: pointer; color: var(--muted); font-size: 12px; margin: 4px 0; }
-.support-more .row { grid-template-columns: var(--label-w, 7em) minmax(0, 1fr); }
+.support-more .row, .support-fonts .row { grid-template-columns: var(--label-w, 7em) minmax(0, 1fr); }
 .rich-glow span { font-family: 'Times New Roman', serif; font-size: 16px; text-shadow: 0 0 3px #f5b400, 0 0 6px #f5b400; }
 .rich-glow.on { background: #fff6c2; }
 .rich-image { gap: 2px; }

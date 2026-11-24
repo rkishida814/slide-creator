@@ -2345,14 +2345,6 @@ function renderGlobal() {
       setProp(doc, ['defaults'], ['font', 'size'], +v);
       fileChanged('layout.yaml');
     }), 'pt')),
-    row('フォント（英語）', selectEl(FONT_OPTS, getJS(doc, ['defaults', 'font', 'family']) ?? DEFAULT_FONT, (v) => {
-      setProp(doc, ['defaults'], ['font', 'family'], v);
-      fileChanged('layout.yaml');
-    })),
-    row('フォント（日本語）', selectEl(JA_FONT_OPTS, getJS(doc, ['defaults', 'font', 'family_ja']) ?? DEFAULT_FONT_JA, (v) => {
-      setProp(doc, ['defaults'], ['font', 'family_ja'], v);
-      fileChanged('layout.yaml');
-    })),
   );
   body.append(...bgRows(getJS(doc, ['background']), (v) => {
     setProp(doc, [], 'background', v);
@@ -3805,6 +3797,7 @@ function buildSupport(box) {
     } catch {
       // 覚えられなくてもよい
     }
+    fitSupportLabels();
     positionSupport();
   };
   more.append(h('summary', null, 'そのほかの文字の設定'));
@@ -3812,9 +3805,13 @@ function buildSupport(box) {
   const n0 = node();
   const f0 = font();
   const i0 = inh();
-  more.append(
+  // フォントは、畳まずに書式のボタンのすぐ下に出す（選んだボックスの文字のフォント）
+  const fonts = h('div', 'support-fonts');
+  fonts.append(
     row('フォント（英語）', selectEl(FONT_OPTS, f0.family ?? DEFAULT_FONT, (v) => set(['font', 'family'], v))),
     row('フォント（日本語）', selectEl(JA_FONT_OPTS, f0.family_ja ?? DEFAULT_FONT_JA, (v) => set(['font', 'family_ja'], v))),
+  );
+  more.append(
     fullRow(pairLine(
       ['揃え方（横）', selectEl(H_OPTS, n0.align ?? i0.align ?? 'left', (v) => set('align', v))],
       ['揃え方（縦）', selectEl(V_OPTS, n0.valign ?? i0.valign ?? 'top', (v) => set('valign', v))],
@@ -3824,7 +3821,8 @@ function buildSupport(box) {
       ['段落の間隔', numEl(n0.para_space ?? i0.para_space ?? 0, '', (v) => set('para_space', +v > 0 ? +v : undefined)), 'pt'],
     )),
     ...textBgRows(b0, n0, (b, k, v) => set(k, v)),
-    row('光彩の色', h2(colorEl(typeof f0.glow === 'object' ? f0.glow.color : f0.glow ? '#ffffff' : '', (v) => set(['font', 'glow'], v ? { ...(typeof f0.glow === 'object' ? f0.glow : {}), color: v } : undefined)))),
+    // 光彩の色の既定は白（光彩を付けていなくても白を出す。付けるかどうかは書式の「光彩」のボタンで切り替える）
+    row('光彩の色', h2(colorEl((typeof f0.glow === 'object' && f0.glow.color) || '#ffffff', (v) => set(['font', 'glow'], v ? { ...(typeof f0.glow === 'object' ? f0.glow : {}), color: v } : undefined)))),
     row('見出しアイコン', h2(
       selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(n0.icon ? [String(n0.icon)] : [])])].map((a) => [a, a.split('/').pop()])], n0.icon ?? '', (v) => set('icon', v || undefined)),
       pickBtn((p) => set('icon', p)),
@@ -3840,8 +3838,9 @@ function buildSupport(box) {
       return unfitTextBelow(b);
     })),
   );
-  el.append(head, ctl.bar, more);
+  el.append(head, ctl.bar, fonts, more);
   document.body.append(el);
+  requestAnimationFrame(fitSupportLabels);
   S.support = { path, el, ctl, moved: false };
 
   // ドラッグで動かす（つまみを持って動かす）
@@ -3864,12 +3863,13 @@ function buildSupport(box) {
 }
 
 // パネルの中の名前の列の幅を、いちばん長い名前に合わせる
+// パネルの行のラベルの幅を、いちばん長いラベルに合わせる（入力欄の左端を揃える。畳んだ中のラベルは開いたときに測る）
 function fitSupportLabels() {
-  const more = S.support?.el.querySelector('.support-more');
-  if (!more) return;
+  const el = S.support?.el;
+  if (!el) return;
   let w = 0;
-  for (const l of more.querySelectorAll('.row > label')) w = Math.max(w, l.scrollWidth);
-  more.style.setProperty('--label-w', `${Math.ceil(w) + 8}px`);
+  for (const l of el.querySelectorAll('.support-fonts .row > label:not(.chk), .support-more[open] .row > label:not(.chk)')) w = Math.max(w, l.scrollWidth);
+  if (w) el.style.setProperty('--label-w', `${Math.ceil(w) + 8}px`);
 }
 
 // ---------------------------------------------------------------- 分割（マス目）
