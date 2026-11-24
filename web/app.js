@@ -150,7 +150,16 @@ async function rebuild() {
   if (S.layout && !S.layout.slides.find((s) => s.id === S.slideId)) S.slideId = S.layout.slides[0]?.id || null;
   if (S.bgEdit && !realSlide()?.bgBoxes?.[S.bgEdit]) S.bgEdit = null;
   if (S.layer === 'block') refreshAutoBlocks();
-  if ((S.sel || []).some((x) => !findBox(x))) setSel([]);
+  // 選んでいたボックスが無くなった（元に戻して、分けたボックスが 1 つに戻ったなど）ときは、残っている外側のボックスを選ぶ
+  if ((S.sel || []).some((x) => !findBox(x))) {
+    const near = (x) => {
+      for (let p = x; p; p = p.includes('.') ? p.slice(0, p.lastIndexOf('.')) : '') if (findBox(p)) return p;
+      return null;
+    };
+    const next = [...new Set((S.sel || []).map(near).filter(Boolean))];
+    if (S.inline && next.length === 1 && next[0] !== S.inline.path && near(S.inline.path) === next[0]) S.inline.path = next[0];
+    setSel(next.length === 1 && isLeaf(findBox(next[0])) ? next : []);
+  }
   status(S.error || '', !!S.error);
   renderSlideTabs();
   // プレビューに直接書いている途中の書き込み。描き直すと書く欄が作り直されるので、描き直さない（書き終えたときに描き直す）。
@@ -788,13 +797,19 @@ function restoreHistory(i) {
 }
 
 function undo() {
-  if (!S.hist || S.histI <= 0) return status('これ以上は戻せません');
-  restoreHistory(S.histI - 1).then(() => status('元に戻しました'));
+  if (!S.hist || S.histI <= 0) {
+    S.undoing = false;
+    return status('これ以上は戻せません');
+  }
+  restoreHistory(S.histI - 1).then(() => status('元に戻しました')).finally(() => (S.undoing = false));
 }
 
 function redo() {
-  if (!S.hist || S.histI >= S.hist.length - 1) return status('これ以上はやり直せません');
-  restoreHistory(S.histI + 1).then(() => status('やり直しました'));
+  if (!S.hist || S.histI >= S.hist.length - 1) {
+    S.undoing = false;
+    return status('これ以上はやり直せません');
+  }
+  restoreHistory(S.histI + 1).then(() => status('やり直しました')).finally(() => (S.undoing = false));
 }
 
 // 選んだ枠の設定を 1 つ変える
@@ -2851,7 +2866,7 @@ function textCtl(opts, onCommit) {
     const v = serializeRich(ed);
     if (v === last) return;
     last = v;
-    onCommit(v);
+    return onCommit(v); // 書き込みが終わる（描き直し終わる）と解決する Promise
   };
   // 書式のボタン（PowerPoint のホームの「フォント」「段落」に似せる）
   // ボタンを押しても、テキストの欄の選択を保つ（mousedown で preventDefault）。▾ のメニューを開くときは選択を覚えておき、付けるときに戻す
@@ -3279,6 +3294,14 @@ function textCtl(opts, onCommit) {
         e.preventDefault();
         commit();
         select(null); // 選択を外す（書くのをやめる）
+      } else if ((e.metaKey || e.ctrlKey) && (e.code === 'KeyZ' || e.code === 'KeyY') && !composing) {
+        // ⌘Z・⌘⇧Z は、書く欄の中だけでなく、アプリの「元に戻す」「やり直す」にする
+        // （書く欄は描き直すたびに作り直すので、ブラウザの書く欄の中の記録は残らない）。
+        // まだ書き込んでいない文字を書き込んでから戻す（その文字の分が 1 回で戻る）
+        e.preventDefault();
+        S.undoing = true; // この書き込みでは、ボックスを文字の高さに合わせない
+        const back = e.shiftKey || e.code === 'KeyY' ? redo : undo;
+        Promise.resolve(commit()).then(back);
       }
     };
     // 日本語入力の変換中は書き込まない（描き直すと変換中の文字が壊れる）。確定したときに書き込む
@@ -3648,8 +3671,10 @@ function buildSupport(box) {
     }
     const empty = !v.replace(/<[^>]*>/g, '').trim() && !/<li/.test(v);
     const done = editOne(b, 'text', empty && b.kind !== 'text' ? undefined : v);
+    if (S.undoing) return done;
     // 書いている途中でも（手を止めて書き込んだとき）、ボックスを文字の高さに合わせ、下に余った部分を別のボックスにする
     Promise.resolve(done).then(() => {
+      if (S.undoing) return releaseFit();
       const inl = S.inline;
       const r = inl && inl.path === b.path && findBox(b.path)?.kind === 'text' ? fitTextBelow(b.path, inl.ed.ownerDocument) : null;
       // 書き込みと同時に描き直しが入った（書く欄を作り直している）ときは、描き直したあとに合わせる
