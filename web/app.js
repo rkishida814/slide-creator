@@ -2836,6 +2836,7 @@ function textCtl(opts, onCommit) {
   let D = document;
   let last = null;
   let timer = null;
+  let composing = false;
   const commit = () => {
     clearTimeout(timer);
     if (!ed) return;
@@ -3272,9 +3273,23 @@ function textCtl(opts, onCommit) {
         select(null); // 選択を外す（書くのをやめる）
       }
     };
-    ed.oninput = () => {
+    // 日本語入力の変換中は書き込まない（描き直すと変換中の文字が壊れる）。確定したときに書き込む
+    if (!ed.imeHooked) {
+      ed.imeHooked = true;
+      ed.addEventListener('compositionstart', () => {
+        composing = true;
+        clearTimeout(timer);
+      });
+      ed.addEventListener('compositionend', () => {
+        composing = false;
+        clearTimeout(timer);
+        timer = setTimeout(commit, 300);
+      });
+    }
+    ed.oninput = (e) => {
       clearTimeout(timer);
-      timer = setTimeout(commit, 600);
+      if (composing || e.isComposing) return;
+      timer = setTimeout(() => !composing && commit(), 600);
     };
     ed.onblur = commit;
     ed.onpaste = (e) => {
@@ -3284,6 +3299,7 @@ function textCtl(opts, onCommit) {
   };
   const detach = () => {
     clearTimeout(timer);
+    composing = false;
     if (D) D.removeEventListener('selectionchange', onSel);
     if (ed) {
       ed.onkeydown = ed.oninput = ed.onblur = ed.onpaste = ed.onfocus = null;
@@ -3468,9 +3484,12 @@ function positionSupport() {
   const clampX = (x) => Math.max(fr.left + 4, Math.min(x, fr.right - pw - 4));
   const clampY = (y) => Math.max(fr.top + 4, Math.min(y, fr.bottom - ph - 4));
   // まず選んだボックスの上に置く。入らなければ下、右、左の順
+  // 横は、書いているカーソルより右に寄せる（カーソルの位置が分からなければ、ボックスの左端から）
+  const c0 = caretRect(fr);
+  const ax = clampX(c0 ? c0.right + 40 : bx);
   const cands = [
-    [clampX(bx), by - ph - m],
-    [clampX(bx), by + bh + m],
+    [ax, by - ph - m],
+    [ax, by + bh + m],
     [bx + bw + m, clampY(by)],
     [bx - pw - m, clampY(by)],
   ];
@@ -3482,7 +3501,7 @@ function positionSupport() {
     const cx = c ? c.right : bx;
     const cy = c ? c.top : by;
     const ch = c ? c.height : 0;
-    if (cx + 24 + pw <= fr.right) pos = [cx + 24, clampY(cy + ch / 2 - 20)];
+    if (cx + 60 + pw <= fr.right) pos = [cx + 60, clampY(cy + ch / 2 - 20)];
     else pos = [clampX(cx - 20), cy + ch + m + ph <= fr.bottom ? cy + ch + m : clampY(cy - ph - m)];
   }
   const [x, y] = pos;
