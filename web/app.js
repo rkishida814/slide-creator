@@ -12,6 +12,24 @@ import { importLayout, placeImported, joinPath, dirOf } from '../src/core/import
 
 const $ = (s) => document.querySelector(s);
 const IMAGE_RE = /\.(png|jpe?g|gif|svg|webp)$/i;
+// 画像のあるボックスで、画像を見ながらトリミングする画面を開く
+function openImageCrop(b) {
+  const el = curSlide().elements.find((x) => x.path === b.path && x.type === 'image');
+  return cropDialog(b, b.node, el);
+}
+// プレビューの外（サポートパネルなど）を押したのが、直前のプレビューのクリックと同じ位置ですぐ後なら、ダブルクリックとして扱う
+document.addEventListener('mousedown', (e) => {
+  const c = S.lastClick;
+  if (!c || e.button !== 0) return;
+  if (Date.now() - c.t > 500 || Math.hypot(e.screenX - c.x, e.screenY - c.y) > 6) return;
+  S.lastClick = null;
+  const b = c.path && findBox(c.path);
+  if (!b || (b.node || {}).image == null || S.layer !== 'main') return;
+  e.preventDefault();
+  e.stopPropagation();
+  openImageCrop(b);
+}, true);
+
 // HEIC（iPhone の写真）。layout.yaml には HEIC のまま書く。ブラウザでは表示できないので、プレビューと書き出しのときだけメモリの中で JPEG に変える（フォルダには何も書かない）
 const HEIC_RE = /\.(heic|heif)$/i;
 
@@ -389,18 +407,22 @@ function setupFrame() {
       const owner = r ? bgOwnerOf(bgHostOf(r)) : null;
       if (owner && owner.path !== S.bgEdit && hasOwnBg(owner)) return switchBgHost(owner, canvasPoint(e));
     }
+    // 1 回目のクリックで出たサポートパネルが 2 回目のクリックの位置に重なっても、ダブルクリックとして扱えるように覚えておく
+    S.lastClick = { t: Date.now(), x: e.screenX, y: e.screenY, path: b ? b.path : null };
     select(b ? b.path : null);
     // ボックスを選んだら、そのまま書けるようにする（クリックした位置にカーソルを置く）
     if (b && S.layer === 'main') startInline({ point: { x: e.clientX, y: e.clientY } });
   });
-  // 画像のあるボックスをダブルクリックしたら、画像を見ながらトリミングする画面を開く（書いている文字の中は、ふつうの語の選択）
+  // 画像のあるボックスをダブルクリックしたら、画像を見ながらトリミングする画面を開く。
+  // 画像のボックスには文字を書く欄が重なっていて、1 回目のクリックでそこが書く状態になる。欄に文字があるときだけ、ふつうの語の選択にする
   doc.addEventListener('dblclick', (e) => {
-    if (S.layer !== 'main' || (S.inline && S.inline.ed.contains(e.target))) return;
-    const b = pickAt(e);
+    if (S.layer !== 'main') return;
+    const inEd = S.inline && S.inline.ed.contains(e.target);
+    if (inEd && S.inline.ed.textContent.trim()) return;
+    const b = inEd ? findBox(S.inline.path) : pickAt(e);
     if (!b || (b.node || {}).image == null) return;
     e.preventDefault();
-    const el = curSlide().elements.find((x) => x.path === b.path && x.type === 'image');
-    cropDialog(b, b.node, el);
+    openImageCrop(b);
   });
   doc.addEventListener('keydown', onKey);
   applyView();
