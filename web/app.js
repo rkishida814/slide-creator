@@ -3453,13 +3453,14 @@ function positionSupport() {
   const fits = (x, y) => x >= fr.left && y >= fr.top && x + pw <= fr.right && y + ph <= fr.bottom;
   const clampX = (x) => Math.max(fr.left + 4, Math.min(x, fr.right - pw - 4));
   const clampY = (y) => Math.max(fr.top + 4, Math.min(y, fr.bottom - ph - 4));
+  // まず選んだボックスの上に置く。入らなければ下、右、左の順
   const cands = [
-    [clampX(bx), by + bh + m],
     [clampX(bx), by - ph - m],
+    [clampX(bx), by + bh + m],
     [bx + bw + m, clampY(by)],
     [bx - pw - m, clampY(by)],
   ];
-  const [x, y] = cands.find(([cx, cy]) => fits(cx, cy)) || [clampX(bx), clampY(by + bh + m)];
+  const [x, y] = cands.find(([cx, cy]) => fits(cx, cy)) || [clampX(bx), clampY(by - ph - m)];
   sp.el.style.left = `${Math.round(x)}px`;
   sp.el.style.top = `${Math.round(y)}px`;
 }
