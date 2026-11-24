@@ -1540,7 +1540,7 @@ function removeSelection() {
 }
 
 // ドラッグで選んだ範囲を 1 つのボックスにまとめる。選んでいないボックスは、そのまま残す。
-// 内容は、選んだ中でいちばん上か左にある、内容のあるボックスのものを使う（ほかに内容があれば、確かめてから消す）
+// 内容は、選んだ中でいちばん上か左にある、内容のあるボックスのものを使う（ほかの内容は確かめずに消す。⌘Z で戻せる）
 function mergeSelection() {
   const u = selectionUnit();
   if (!u || (S.sel || []).length < 2) return;
@@ -1548,7 +1548,6 @@ function mergeSelection() {
   const order = (b) => slide.boxes.indexOf(b);
   const leaves = (S.sel || []).map(findBox).filter(Boolean).sort((a, b) => order(a) - order(b));
   const filled = leaves.filter((b) => b.kind === 'image' || b.kind === 'text');
-  if (filled.length > 1 && !S.confirmed && !confirm('内容は、選んだ中でいちばん上か左にあるボックスのものだけを残し、ほかは消します。まとめますか？')) return;
   let node = filled.length ? writtenNode(filled[0]) : S.bgEdit && leaves.length ? writtenNode(leaves[0]) : {};
   if (typeof node === 'string') node = { text: node };
   delete node.id;
