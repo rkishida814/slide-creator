@@ -115,7 +115,14 @@ export function openCrop({ src, url, natural, crop, cellAspect, lockDefault }) {
     };
     img.src = url;
     if (img.complete && img.naturalWidth) draw();
+    dlg.returnValue = '';
     dlg.showModal();
+    // Enter は適用（form の既定では、最初のボタン「トリミングを外す」になってしまう）
+    dlg.onkeydown = (e) => {
+      if (e.key !== 'Enter' || e.isComposing) return;
+      e.preventDefault();
+      dlg.close('ok');
+    };
     dlg.onclose = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);

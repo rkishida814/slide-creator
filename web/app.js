@@ -12,7 +12,7 @@ import { importLayout, placeImported, joinPath, dirOf } from '../src/core/import
 
 const $ = (s) => document.querySelector(s);
 const IMAGE_RE = /\.(png|jpe?g|gif|svg|webp)$/i;
-// HEIC（iPhone の写真）。ブラウザでは表示できないので、使うときに JPEG に変えてフォルダに入れる
+// HEIC（iPhone の写真）。layout.yaml には HEIC のまま書く。ブラウザでは表示できないので、プレビューと書き出しのときだけメモリの中で JPEG に変える（フォルダには何も書かない）
 const HEIC_RE = /\.(heic|heif)$/i;
 
 const S = {
@@ -30,6 +30,7 @@ const S = {
   outline: true,
   imageSizes: new Map(),
   imageURLs: new Map(),
+  heicJpegs: new Map(), // HEIC の場所 → メモリの中で変えた JPEG
   layoutFiles: [], // 取り込めるレイアウト（サブフォルダの layout.yaml）
   importFor: null, // 「レイアウトを取り込む」の欄を開いているボックスの path
   overflow: [],
@@ -64,6 +65,7 @@ async function openSource(source) {
     S.layoutFiles = all.filter((f) => /\/layout\.ya?ml$/.test(f) && !/(^|\/)(out|templates)\//.test(f));
     S.imageSizes.clear();
     S.imageURLs.clear();
+    S.heicJpegs.clear();
     S.slideId = null;
     setSel([]);
     $('#project-name').textContent = source.name + (source.writable ? '' : '（見本）');
@@ -100,7 +102,7 @@ function collectImages(node, out) {
 async function loadImage(src) {
   if (S.imageSizes.has(src)) return;
   try {
-    const url = await S.source.imageURL(src);
+    const url = HEIC_RE.test(src) ? URL.createObjectURL(await heicBlob(src)) : await S.source.imageURL(src);
     // decode() は画面が隠れていると終わらないことがあるので、onload で待つ
     const img = await new Promise((res, rej) => {
       const im = new Image();
@@ -2547,21 +2549,12 @@ function gridFields(box, node) {
   return fs;
 }
 
-// 画像の選択肢：フォルダの画像と、JPEG に変えていない HEIC（選ぶと JPEG に変えて使う）
+// 画像の選択肢：フォルダの画像と HEIC
 function imageOpts(cur) {
-  const heics = (S.heics || []).filter((x) => !S.assets.includes(heicJpegPath(x)));
-  return [
-    ...[...new Set([...S.assets, ...(cur ? [String(cur)] : [])])].map((a) => [a, a.split('/').pop()]),
-    ...heics.map((a) => [a, `${a.split('/').pop()}（選ぶと JPEG に変える）`]),
-  ];
+  return [...new Set([...S.assets, ...(S.heics || []), ...(cur ? [String(cur)] : [])])].map((a) => [a, a.split('/').pop()]);
 }
-// 選んだ画像が HEIC なら JPEG に変えて、その場所を渡す
 function withImage(v, fn) {
-  if (!HEIC_RE.test(v)) return fn(v);
-  return useHeic(v).then((p) => {
-    status(S.pickMsg || '');
-    return fn(p);
-  }, (e) => status(`HEIC の写真を読めません: ${e.message || e}`, true));
+  return fn(v);
 }
 
 function imageFields(box, node, inh) {
@@ -2775,25 +2768,13 @@ async function pickImageFile() {
   const input = document.createElement('input');
   input.type = 'file';
   input.accept = 'image/png,image/jpeg,image/gif,image/svg+xml,image/webp,image/heic,image/heif,.heic,.heif';
-  let file = await new Promise((res) => {
+  const file = await new Promise((res) => {
     input.onchange = () => res(input.files[0] || null);
     input.addEventListener('cancel', () => res(null));
     input.click();
   });
   if (!file) return null;
-  let name = file.name.replace(/[\\/:*?"<>|]/g, '_');
-  if (HEIC_RE.test(name)) {
-    // HEIC は JPEG に変えてから入れる（名前の拡張子も .jpg にする）
-    try {
-      status('HEIC の写真を JPEG に変えています…');
-      file = await heicToJpeg(file);
-      status('');
-    } catch (e) {
-      status(`HEIC の写真を読めません: ${e.message || e}`, true);
-      return null;
-    }
-    name = name.replace(HEIC_RE, '.jpg');
-  }
+  const name = file.name.replace(/[\\/:*?"<>|]/g, '_');
   const m = name.match(/^(.*?)(\.[^.]+)?$/);
   let path = name;
   for (let k = 1; await S.source.exists(path); k++) {
@@ -2811,7 +2792,9 @@ async function pickImageFile() {
     status(`画像をフォルダに入れられません: ${e.message}`, true);
     return null;
   }
-  if (!S.assets.includes(path)) S.assets.push(path);
+  if (HEIC_RE.test(path)) {
+    if (!S.heics.includes(path)) S.heics.push(path);
+  } else if (!S.assets.includes(path)) S.assets.push(path);
   S.pickMsg = `画像 ${path} をフォルダに入れました`;
   return path;
 }
@@ -2829,20 +2812,16 @@ function heicToJpeg(blob) {
   return heicLib.then((f) => f({ blob, type: 'image/jpeg', quality: 0.92 }));
 }
 
-// フォルダの HEIC を JPEG に変えて、隣に「名前_heic.jpg」として入れ、その場所を返す（すでにあれば、それを使う）
-function heicJpegPath(path) {
-  return path.replace(HEIC_RE, '_heic.jpg');
-}
-async function useHeic(path) {
-  const out = heicJpegPath(path);
-  if (!(await S.source.exists(out))) {
-    status(`${path.split('/').pop()} を JPEG に変えています…`);
-    const jpg = await heicToJpeg(await S.source.readBlob(path));
-    await S.source.writeFile(out, jpg);
+// フォルダの HEIC を、メモリの中で JPEG に変える（一度変えたものは覚えておく）
+function heicBlob(path) {
+  if (!S.heicJpegs.has(path)) {
+    const msg = `${path.split('/').pop()} を読み込んでいます…`;
+    status(msg);
+    const p = S.source.readBlob(path).then(heicToJpeg);
+    p.then(() => $('#status').textContent === msg && status(''), () => S.heicJpegs.delete(path));
+    S.heicJpegs.set(path, p);
   }
-  if (!S.assets.includes(out)) S.assets.push(out);
-  S.pickMsg = `${path.split('/').pop()} を JPEG に変えて ${out} として使います`;
-  return out;
+  return S.heicJpegs.get(path);
 }
 
 // ▾ のメニューが画面の下にはみ出すときは、上に開く。上にも入りきらなければ、広いほうに開いてスクロールできるようにする
@@ -3748,19 +3727,19 @@ function buildSupport(box) {
     if (node().image != null) item('画像を外す', () => setImage(undefined));
     const list = h('div', 'rich-imgs');
     imgMenu.append(list);
-    const imgs = [...new Set(S.assets)];
-    // HEIC は、JPEG に変えたものがまだ無いものだけ出す（選ぶと JPEG に変えて使う）
-    const heics = (S.heics || []).filter((x) => !S.assets.includes(heicJpegPath(x)));
+    // HEIC は、まだ読み込んでいないものは名前だけ出す（全部を変えると時間がかかるので）。読み込んだものは縮小画像で出す
+    const heics = (S.heics || []).filter((x) => !S.imageURLs.get(x));
+    const imgs = [...new Set([...S.assets, ...(S.heics || []).filter((x) => S.imageURLs.get(x))])];
     if (!imgs.length && !heics.length) list.append(h('div', 'note', 'フォルダに画像がありません'));
     for (const a of heics) {
       const b = h('button', 'rich-btn rich-item rich-thumb');
       b.type = 'button';
-      b.title = `${a}（選ぶと JPEG に変えて使います）`;
+      b.title = a;
       b.append(h('span', 'heic-mark', 'HEIC'), h('span', 'name', a.split('/').pop()));
       b.onmousedown = (ev) => {
         ev.preventDefault();
         imgMenu.hidden = true;
-        useHeic(a).then(setImage, (e) => status(`HEIC の写真を読めません: ${e.message || e}`, true));
+        setImage(a);
       };
       list.append(b);
     }
@@ -4562,7 +4541,7 @@ async function exportPPTX() {
   try {
     status('PPTX を作成中…');
     const { underlines, textBgs } = await measureForPPTX();
-    const pres = await buildPPTX(window.PptxGenJS, S.layout, async (src) => ({ data: await blobToDataURL(await S.source.readBlob(src)) }), { underlines, textBgs });
+    const pres = await buildPPTX(window.PptxGenJS, S.layout, async (src) => ({ data: await blobToDataURL(await (HEIC_RE.test(src) ? heicBlob(src) : S.source.readBlob(src))) }), { underlines, textBgs });
     const blob = await finishPPTX(pres, window.JSZip, 'blob');
     const name = `${S.source.name}.pptx`;
     if (S.source.writable) {
