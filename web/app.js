@@ -4,7 +4,7 @@ import { layoutDoc } from '../src/core/layout.js';
 import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, measureTextBgs, hasTextBg, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
 import { richToHTML, paragraphs, bulletType, underlineHTML } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
-import { PER_INCH, toUnit, defaultPadding, parseBox, isBgTree } from '../src/core/units.js';
+import { PER_INCH, toUnit, defaultPadding, imagePadding, parseBox, isBgTree } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
 import { parse, stringify, setProp, replaceNode, getJS, YAML } from './edit.js';
 import { openCrop } from './crop.js';
@@ -470,7 +470,7 @@ function fitTextBelow(path, doc, dry = false) {
 function imageHasGap(box) {
   const el = curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
   if (!el) return false;
-  const pad = parseBox((box.node || {}).padding, S.layout.unit);
+  const pad = parseBox(imagePadding(box.node), S.layout.unit);
   return box.rect.h - pad.t - pad.b - el.rect.h > 0.01;
 }
 
@@ -484,7 +484,7 @@ async function fitImagesBelow(paths) {
   if (lca && lca.kind === 'split' && lca.node.split === 'cols') {
     const needOf = (b) => {
       const el = curSlide().elements.find((e) => e.path === b.path && e.type === 'image');
-      const pad = parseBox((b.node || {}).padding, S.layout.unit);
+      const pad = parseBox(imagePadding(b.node), S.layout.unit);
       return el ? el.rect.h + pad.t + pad.b : b.rect.h;
     };
     const need = Math.ceil(Math.max(...boxes.map(needOf)) * 100) / 100;
@@ -507,7 +507,7 @@ function fitImageBelow(box) {
   const el = curSlide().elements.find((e) => e.path === box.path && e.type === 'image');
   if (!el) return;
   const u = S.layout.unit;
-  const pad = parseBox((box.node || {}).padding, u);
+  const pad = parseBox(imagePadding(box.node), u);
   const need = Math.ceil((el.rect.h + pad.t + pad.b) * 100) / 100;
   if (box.rect.h - need < 0.01) return status('画像の上下に余白はありません。');
   // 空きのボックスは作らない。ボックスを縮め、空いた分はすぐ下のボックスが受け取る（下のボックスが上に伸びる）
@@ -3799,7 +3799,30 @@ function buildSupport(box) {
     fitMenu(imgMenu);
   };
   imgWrap.append(imgBtn, imgMenu);
-  ctl.bar.append(h('span', 'rich-sep'), glowBtn, imgWrap);
+  // 余白：文字の余白（padding）と画像の余白（image_padding）。上下左右に同じ値。書いていなければ 0.5 cm
+  const u0 = S.layout.unit;
+  const padOf = (p) => {
+    const b4 = parseBox(p, u0);
+    return b4.t === b4.r && b4.t === b4.b && b4.t === b4.l ? Math.round(b4.t * 1000) / 1000 : '';
+  };
+  const defPad = padOf(defaultPadding('text'));
+  const padIn = (key, cur) => {
+    const i = numEl(padOf(cur), '別々', (v) => {
+      if (v === '' || !(+v >= 0)) return;
+      const n = Math.round(+v * 1000) / 1000;
+      set(key, n === defPad ? undefined : n);
+    }, 0.1);
+    i.min = '0';
+    i.className = 'rich-pad';
+    return i;
+  };
+  const grpPad = h('span', 'rich-group rich-pads');
+  grpPad.append(
+    h('span', 'rich-unit', '余白 文字'), padIn('padding', node().padding ?? defaultPadding('text')),
+    h('span', 'rich-unit', '画像'), padIn('image_padding', imagePadding(node())),
+    h('span', 'rich-unit', u0),
+  );
+  ctl.bar.append(h('span', 'rich-sep'), glowBtn, imgWrap, grpPad);
   document.addEventListener('mousedown', function outside(e) {
     if (!el.isConnected) return document.removeEventListener('mousedown', outside);
     if (!e.target.closest?.('.rich-drop')) imgMenu.hidden = true;
@@ -4808,7 +4831,7 @@ function onKey(e) {
 }
 
 // 選んだボックス（複数も）の中身を消して、空のテキストボックスにする。ボックスの大きさ・余白・背景・枠線・文字の設定は残す
-const CLEAR_KEYS = ['image', 'crop', 'fit', 'split', 'children', 'ratio', 'gap', 'grid', 'items', 'icon', 'icon_size', 'text_bg', 'from_layout'];
+const CLEAR_KEYS = ['image', 'image_padding', 'crop', 'fit', 'split', 'children', 'ratio', 'gap', 'grid', 'items', 'icon', 'icon_size', 'text_bg', 'from_layout'];
 function clearSelection() {
   const slide = curSlide();
   const leaves = [...new Set((S.sel || []).map(findBox).filter(Boolean).flatMap((b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b))))];

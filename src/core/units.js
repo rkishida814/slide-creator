@@ -21,10 +21,15 @@ export function convert(value, from, to) {
   return (value / PER_INCH[from]) * PER_INCH[to];
 }
 
-// テキストのボックス（と、テキストを入れる前の空のボックス）で padding を書かないときの余白：上下左右に 0.5 cm
+// 文字・画像・空のボックスで padding（文字の余白）を書かないときの余白：上下左右に 0.5 cm
 export const TEXT_PADDING = ['0.5cm', '0.5cm', '0.5cm', '0.5cm'];
 export function defaultPadding(kind) {
-  return kind === 'text' || kind === 'empty' ? TEXT_PADDING : null;
+  return kind === 'text' || kind === 'empty' || kind === 'image' ? TEXT_PADDING : null;
+}
+// 画像の余白（ボックスの縁から画像までの余白）。padding（文字の余白）とは別に、image_padding に書く。書かなければ上下左右に 0.5 cm
+export const IMAGE_PADDING = TEXT_PADDING;
+export function imagePadding(node) {
+  return (node && node.image_padding) ?? IMAGE_PADDING;
 }
 
 // 背景の値が「背景を分けた木」かどうか。
