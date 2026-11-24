@@ -138,7 +138,11 @@ async function rebuild() {
   if ((S.sel || []).some((x) => !findBox(x))) setSel([]);
   status(S.error || '', !!S.error);
   renderSlideTabs();
-  renderPreview();
+  if (S.skipPreview) {
+    // プレビューに直接書いている途中の書き込み。描き直すと書く欄が作り直されるので、描き直さない（書き終えたときに描き直す）
+    S.skipPreview = false;
+    syncSupport();
+  } else renderPreview();
   renderProps();
   $('#btn-save').disabled = !anyDirty();
 }
@@ -181,6 +185,8 @@ function renderSlideTabs() {
 
 const FRAME_CSS = `
 html { background: #dfe3e8; }
+.ied { outline: none; cursor: text; }
+.txt { cursor: default; }
 body.bgedit .txt, body.bgedit .img:not(.bg) { opacity: .25; }
 body { background: transparent !important; overflow: auto; margin: 0; }
 .zoom-space { position: absolute; left: 0; top: 0; pointer-events: none; }
@@ -205,8 +211,16 @@ function renderPreview() {
     srcURL: (src) => S.imageURLs.get(src) || '',
   }).replace('</style>', `${FRAME_CSS}</style>`);
   frame.onload = setupFrame;
+  // プレビューに直接書いていたら、カーソルの位置を覚えておき、描き直したあとに戻す
+  if (S.inline) {
+    const ed = S.inline.ed;
+    S.inlineRestore = { path: S.inline.path, pos: offsetsIn(ed), focus: ed.ownerDocument.activeElement === ed };
+    S.support?.ctl.detach();
+    S.inline = null;
+  }
   // プレビューを描き直すあいだ、キー操作（⌘Z など）がどこにも届かなくならないように、プレビューにあったカーソルをアプリに戻す
-  if (document.activeElement === frame) {
+  // （プレビューに直接書いていたときは外さない。描き直したあと、書く欄にカーソルを戻す）
+  if (document.activeElement === frame && !S.inlineRestore?.focus) {
     frame.blur();
     window.focus();
   }
@@ -215,6 +229,7 @@ function renderPreview() {
 
 // 選択。1 つならその枠の設定、2 つ以上なら比率と背景を出す
 function setSel(paths) {
+  if (S.inline && !(paths.length === 1 && paths[0] === S.inline.path)) finishInline();
   S.sel = paths;
   S.selected = paths.length === 1 ? paths[0] : null;
   if (S.importFor && S.importFor !== S.selected) S.importFor = null;
@@ -252,6 +267,7 @@ function setupFrame() {
   // 書き換えて描き直しても、見ていた位置を保つ
   doc.defaultView.addEventListener('scroll', () => {
     S.scroll = { x: doc.defaultView.scrollX, y: doc.defaultView.scrollY };
+    positionSupport();
   });
   // クリックで 1 つ選ぶ。ドラッグで、長方形になるように複数選ぶ。
   // ⌘（cmd。Windows では Ctrl）を押しながらドラッグすると、離した先のボックスと中身を入れ替える
@@ -262,6 +278,8 @@ function setupFrame() {
     const ae = document.activeElement;
     if (ae && ae !== document.body && ae !== frame) ae.blur();
     if (e.button !== 0) return;
+    // 書いている文字の中を押したら、ふつうの文字の選択（ドラッグで範囲を選ぶ）にする
+    if (S.inline && S.inline.ed.contains(e.target)) return;
     // 背景では、いま開いている背景の枠だけをドラッグで選ぶ（別のボックスはクリックで開く）
     const b = S.layer === 'bg' ? leafAt(e) : pickAt(e);
     if (!b) return;
@@ -321,6 +339,7 @@ function setupFrame() {
       dragged = false;
       return;
     }
+    if (S.inline && S.inline.ed.contains(e.target)) return; // 書いている文字の中（カーソルはそのまま）
     const b = pickAt(e);
     if (S.layer === 'block') {
       setSel(b ? blockLeafPaths(b) : []);
@@ -335,10 +354,22 @@ function setupFrame() {
       if (owner && owner.path !== S.bgEdit && hasOwnBg(owner)) return switchBgHost(owner, canvasPoint(e));
     }
     select(b ? b.path : null);
+    // ボックスを選んだら、そのまま書けるようにする（クリックした位置にカーソルを置く）
+    if (b && S.layer === 'main') startInline({ point: { x: e.clientX, y: e.clientY } });
   });
   doc.addEventListener('keydown', onKey);
   applyView();
   measureOverflow(doc);
+  // 選んでいるボックスは、描き直したあとも書ける状態にする（書いていたなら、同じ位置にカーソルを戻す）
+  let rs = S.inlineRestore;
+  S.inlineRestore = null;
+  // 描き直しが始まったあとに書き始めたとき（書く欄が古いプレビューにある）は、新しいプレビューで書く欄にカーソルを入れ直す
+  if (!rs && S.inline && S.inline.ed.ownerDocument !== doc) {
+    rs = { path: S.inline.path, pos: null, focus: true };
+    S.support?.ctl.detach();
+    S.inline = null;
+  }
+  if (S.support && S.layer === 'main') startInline(rs && rs.path === S.support.path ? { pos: rs.pos, focus: rs.focus } : { focus: false });
   // 文字の高さに合わせ直すボックスを、1 つずつ処理する（書き換えると描き直され、ここに戻って次を処理する）
   while (S.pendingFit && S.pendingFit.length) {
     const p = S.pendingFit.shift();
@@ -651,6 +682,7 @@ function applyView() {
   $('#layer').value = S.layer;
   $('#btn-dup').disabled = !dupPlan();
   $('#btn-merge').disabled = !((S.sel || []).length > 1 && selectionUnit());
+  syncSupport();
   $('#btn-delete').disabled = !((S.sel || []).length > 1 ? selectionUnit() : one && canRemove(one));
 }
 
@@ -716,6 +748,7 @@ function pushHistory() {
 
 function restoreHistory(i) {
   const snap = S.hist[i];
+  if (S.support) S.support.stale = true;
   S.histI = i;
   for (const [k, text] of Object.entries(snap)) S.files[k] = { text, doc: parse(text), dirty: text !== S.saved?.[k] };
   S.keepPanel = null;
@@ -788,13 +821,16 @@ function changeKind(box, kind, imagePath) {
 // 外側の枠に残す設定（余白は残さない。外側の枠はクリックで選べず、見えない余白になるため）
 const FRAME_KEYS = ['id', 'background', 'border'];
 const MOVE_TO_CHILD = ['padding', 'background_inset'];
-function splitBox(box, dir, n) {
+function splitBox(box, dir, n, cols = 1) {
+  // cols > 1：分けた各段を、さらに左右に cols 個に分ける（マス目で「行 × 列」を選んだとき）
+  const grid = (kids, rest) => (cols > 1 ? kids.map((k, i) => ({ split: 'cols', children: [k, ...Array.from({ length: cols - 1 }, () => rest(i))] })) : kids);
   const { file, path, mode } = box.src;
   const doc = S.files[file].doc;
   if (S.layer === 'bg') {
     // 背景の枠を分けるときは、分けた枠のそれぞれに同じ背景を写す（見た目は変わらず、あとで 1 つずつ変えられる）
     const bg = plain((box.node || {}).background);
-    const children = Array.from({ length: n }, () => (bg != null ? { background: structuredClone(bg) } : {}));
+    const leaf = () => (bg != null ? { background: structuredClone(bg) } : {});
+    const children = grid(Array.from({ length: n }, leaf), leaf);
     // 枠の余白は、分けた外側に残す（分けた枠は、余白の内側に並ぶ）
     const pad = plain((box.node || {}).padding);
     replaceNode(doc, path, { split: dir, ...(pad != null ? { padding: pad } : {}), children });
@@ -806,7 +842,7 @@ function splitBox(box, dir, n) {
   const pad = pn && typeof pn === 'object' && pn.padding != null ? { padding: pn.padding } : {};
   const hasContent = box.kind !== 'empty';
   // 余白は、分けた内側のボックスの 1 つずつに写す（選べば欄に見え、そこで直せる）
-  const children = Array.from({ length: n }, (_, i) => ({ ...(i === 0 && hasContent ? content : {}), ...structuredClone(pad) }));
+  const children = grid(Array.from({ length: n }, (_, i) => ({ ...(i === 0 && hasContent ? content : {}), ...structuredClone(pad) })), () => structuredClone(pad));
   if (mode === 'direct') {
     const cur = getJS(doc, path);
     const keep = cur && typeof cur === 'object' ? Object.fromEntries(Object.entries(cur).filter(([k]) => FRAME_KEYS.includes(k))) : {};
@@ -1662,23 +1698,17 @@ function renderPropsInner() {
   // 種類
   const fsSize = sizeFields(box);
   if (fsSize) el.append(fsSize);
-  if (isLeaf(box)) {
-    el.append(row('内容', selectEl(KIND_OPTS, kind, (v) => {
-      if (v === kind) return;
-      // 画像にするとき、フォルダに画像が無ければファイルを選ぶ画面を出す
-      if (v === 'image' && !S.assets.length) return pickImageFile().then((path) => (path ? changeKind(box, v, path) : renderProps()));
-      if (v === 'layout') {
-        S.importFor = box.path;
-        return renderProps();
-      }
-      changeKind(box, v);
+  // 文字・画像は、プレビューのボックスに直接書き、サポートパネルで設定する（この欄には出さない）
+  if (isLeaf(box) && S.importFor !== box.path) {
+    el.append(row('', btn('レイアウトを取り込む…', () => {
+      S.importFor = box.path;
+      renderProps();
     })));
   }
 
   // 中身
   if (S.importFor === box.path && isLeaf(box)) el.append(importFields(box));
   if (box.kind === 'image') el.append(imageFields(box, node, inh));
-  if (kind === 'text') el.append(textFields(box, node, inh));
 
   // 枠
   const fsBox = fieldset('余白・背景・枠線');
@@ -2628,56 +2658,6 @@ function fullRow(line) {
   return row(line._rowLabel || '', line);
 }
 
-function textFields(box, node, inh) {
-  const fs = fieldset(null);
-  // 文字の高さが変わりうる書き換えのあとで、下の余白を合わせ直す
-  const edit = (b, k, v) => {
-    S.pendingFit = [box.path];
-    return editOne(b, k, v);
-  };
-  const f = node.font || {};
-  const fi = inh.font || {};
-  // 文字の色は、テキストの欄の A で変える（文字を選んでいればその部分、選んでいなければボックス全体）
-  const rich = richEditor(wrapWhole(String(node.text ?? ''), f), {
-    base: f.size ?? fi.size ?? DEFAULT_SIZE,
-    path: box.path,
-    onBaseSize: (n) => edit(box, ['font', 'size'], n),
-    boxColor: f.color ?? fi.color,
-    onBoxColor: (v) => edit(box, ['font', 'color'], v || undefined),
-  }, (v) => {
-    S.keepPanel = box.path;
-    const off = box.src.mode === 'direct' ? undefined : false;
-    const pairs = [['text', v]];
-    if (f.bold) pairs.push([['font', 'bold'], off]);
-    if (f.italic) pairs.push([['font', 'italic'], off]);
-    S.pendingFit = [box.path];
-    editMany(box, pairs);
-  });
-  fs.append(
-    row('テキスト', rich),
-    row('', checkEl('テキストの下に生じた余白を別のボックスにする', node.split_below !== false, (x) => {
-      if (x) {
-        S.pendingFit = [box.path];
-        return editOne(box, 'split_below', undefined);
-      }
-      return unfitTextBelow(box);
-    })),
-    row('フォント（英語）', selectEl(FONT_OPTS, f.family ?? fi.family ?? DEFAULT_FONT, (v) => edit(box, ['font', 'family'], v))),
-    row('フォント（日本語）', selectEl(JA_FONT_OPTS, f.family_ja ?? fi.family_ja ?? DEFAULT_FONT_JA, (v) => edit(box, ['font', 'family_ja'], v))),
-    ...textBgRows(box, node, edit),
-    row('見出しアイコン', h2(
-      selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(node.icon ? [String(node.icon)] : [])])].map((a) => [a, a.split('/').pop()])], node.icon ?? '', (v) => edit(box, 'icon', v || undefined)),
-      pickBtn((path) => edit(box, 'icon', path)),
-    )),
-    ...(node.icon ? [row('アイコンの大きさ', h2(numEl(node.icon_size ?? f.size ?? fi.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && edit(box, 'icon_size', +v)), 'pt'))] : []),
-    alignRow(box, node, inh, 'left', 'top'),
-    row('行間', h2(numEl(node.line_height ?? inh.line_height ?? 1.2, '', (v) => +v > 0 && edit(box, 'line_height', +v), 0.05), '倍')),
-    row('段落の間隔', h2(numEl(node.para_space ?? inh.para_space ?? 0, '', (v) => edit(box, 'para_space', +v > 0 ? +v : undefined)), 'pt')),
-  );
-  return fs;
-}
-
-
 // 文字の下地（text_bg）：付けるか・色・透明度（%）の 1 行
 function textBgRows(box, node, edit) {
   const raw = node.text_bg;
@@ -2760,29 +2740,21 @@ async function pickImageFile() {
   return path;
 }
 
-// テキストの欄。ドラッグで選んだ範囲を、ボタンで太字・斜体・上付き・下付きにする。
-// Enter は段落の区切り（行末に ¶）、Shift+Enter は段落の中の改行（↵）。
-// layout.yaml には、段落の区切りを改行、段落の中の改行を <br> として書く
-const SOFT_BREAK = '<span class="sb" contenteditable="false">↵</span><br>';
-function editorHTML(value, base = DEFAULT_SIZE) {
-  return paragraphs(value)
-    .map((p) => `<div${{ normal: ' class="li"', hidden: ' class="li lih"' }[bulletType(p)] || ''}>${richToHTML(p, SOFT_BREAK, (src) => S.imageURLs.get(src) || '', (n) => `${+(n / base).toFixed(4)}em`) || '<br>'}</div>`)
-    .join('');
-}
-
-function richEditor(value, opts, onCommit) {
-  const base = opts.base || DEFAULT_SIZE; // ボックスの文字の大きさ（pt）。一部の大きさは、これに対する比で編集欄に出す
-  const wrap = h('div', 'rich-wrap');
-  if (opts.path) wrap.dataset.path = opts.path; // どのボックスの欄か（打っている最中に設定欄を作り直すとき、この欄を戻す）
+// 文字の書式の道具（サポートパネルの書式のボタンと、文字を書く欄の操作）。
+// 書く欄（ed）は、プレビューの中の文字の要素で、プレビューを描き直すたびに attach で差し替える。
+// D は ed のある文書（プレビューの中の文書）。選んだ範囲・execCommand は D で扱う
+//   opts.base()：ボックスの文字の大きさ（pt）
+//   opts.onBaseSize(n) / onBoxColor(c) / onBoxToggle('bold' | 'italic')：文字を選んでいないときに、ボックス全体を変える
+function textCtl(opts, onCommit) {
+  const baseNow = () => opts.base() || DEFAULT_SIZE;
   const bar = h('div', 'rich-bar');
-  const ed = document.createElement('div');
-  ed.className = 'rich';
-  ed.contentEditable = 'true';
-  ed.innerHTML = editorHTML(value, base);
-  let last = value;
+  let ed = null;
+  let D = document;
+  let last = null;
   let timer = null;
   const commit = () => {
     clearTimeout(timer);
+    if (!ed) return;
     const v = serializeRich(ed);
     if (v === last) return;
     last = v;
@@ -2792,12 +2764,13 @@ function richEditor(value, opts, onCommit) {
   // ボタンを押しても、テキストの欄の選択を保つ（mousedown で preventDefault）。▾ のメニューを開くときは選択を覚えておき、付けるときに戻す
   let saved = null;
   const saveSel = () => {
-    const sel = getSelection();
+    if (!ed) return;
+    const sel = D.getSelection();
     if (sel.rangeCount && ed.contains(sel.getRangeAt(0).commonAncestorContainer)) saved = sel.getRangeAt(0).cloneRange();
   };
   const restoreSel = () => {
-    if (!saved) return false;
-    const sel = getSelection();
+    if (!saved || !ed) return false;
+    const sel = D.getSelection();
     sel.removeAllRanges();
     sel.addRange(saved);
     return true;
@@ -2814,8 +2787,11 @@ function richEditor(value, opts, onCommit) {
     return b;
   };
   const exec = (cmd) => () => {
-    document.execCommand('styleWithCSS', false, false);
-    document.execCommand(cmd);
+    if (!hasSel() && (cmd === 'bold' || cmd === 'italic') && opts.onBoxToggle) return opts.onBoxToggle(cmd);
+    if (!ed) return;
+    restoreSel();
+    D.execCommand('styleWithCSS', false, false);
+    D.execCommand(cmd);
     commit();
   };
   // ▾ のメニュー。開くと、テキストの欄の選択を覚えておく
@@ -2850,11 +2826,11 @@ function richEditor(value, opts, onCommit) {
   sizeIn.step = '1';
   sizeIn.className = 'rich-size';
   sizeIn.title = '文字の大きさ（pt）。文字を選んでいれば、その部分だけを変える';
-  sizeIn.value = String(base);
+  sizeIn.value = String(baseNow());
   sizeIn.onchange = () => {
     const n = +sizeIn.value;
     if (!(n > 0)) return;
-    if (saved && !saved.collapsed && ed.contains(saved.commonAncestorContainer)) {
+    if (hasSel()) {
       restoreSel();
       applySize(n);
       saveSel();
@@ -2864,14 +2840,14 @@ function richEditor(value, opts, onCommit) {
   // 範囲 r の始まりの文字の大きさ
   const sizeAt = (r) => {
     const n = r?.startContainer;
-    if (!n || !ed.contains(n)) return base;
+    if (!n || !ed || !ed.contains(n)) return baseNow();
     const sp = (n.nodeType === 1 ? n : n.parentElement)?.closest('span.fs');
-    return sp && ed.contains(sp) ? +sp.dataset.size : base;
+    return sp && ed.contains(sp) ? +sp.dataset.size : baseNow();
   };
   // テキストの欄で選んだ範囲を覚えておき（大きさの欄を押すと欄の選択が外れるため）、大きさの欄にその大きさを出す
   const onSel = () => {
-    if (!wrap.isConnected) return document.removeEventListener('selectionchange', onSel);
-    const sel = getSelection();
+    if (!bar.isConnected || !ed) return;
+    const sel = D.getSelection();
     if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer)) return;
     saved = sel.getRangeAt(0).cloneRange();
     if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
@@ -2880,7 +2856,8 @@ function richEditor(value, opts, onCommit) {
   // 範囲 r の最初の文字に付いている一部の色（"#RRGGBB"）。付いていなければ null
   const colorAt = (r) => {
     if (!r) return null;
-    const tw = document.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+    if (!ed) return null;
+    const tw = D.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
     let t = null;
     for (let n = tw.nextNode(); n; n = tw.nextNode()) {
       if (!n.nodeValue.replace(/​/g, '') || !r.intersectsNode(n)) continue;
@@ -2898,21 +2875,13 @@ function richEditor(value, opts, onCommit) {
   };
   // 選んだ範囲が変わったことを、設定欄の「色」に知らせる（選んだ部分の色を出すため）
   // A の帯に、いまの色（選んだ部分の色。選んでいなければボックス全体の文字の色）を出す
-  const shownColor = () => (hasSel() && colorAt(saved)) || normColor(opts.boxColor) || '#000000';
+  const shownColor = () => (hasSel() && colorAt(saved)) || normColor(opts.boxColor?.()) || '#000000';
   const tellSel = () => {
     const b = bar.querySelector('.rich-colorA .bar');
     if (b) b.style.background = shownColor();
   };
-  document.addEventListener('selectionchange', onSel);
-  // 設定欄を作り直したとき（renderProps）に、選んでいた範囲を新しい欄へ写すための口
-  wrap._getSaved = () => saved;
-  wrap._setSaved = (r) => {
-    saved = r;
-    sizeIn.value = String(sizeAt(r));
-    tellSel();
-  };
   // 文字を選んでいるか（カーソルだけなら false）
-  const hasSel = () => !!(saved && !saved.collapsed && ed.contains(saved.commonAncestorContainer));
+  const hasSel = () => !!(ed && saved && !saved.collapsed && ed.contains(saved.commonAncestorContainer));
   const grpSize = h('span', 'rich-group');
   grpSize.append(sizeIn, h('span', 'rich-unit', 'pt'));
 
@@ -2931,7 +2900,7 @@ function richEditor(value, opts, onCommit) {
       const item = (html, u) => menu.append(iconBtn('rich-item', html, '', () => pickU(u)));
       item('<u>一重線</u>', { type: 'single' });
       item('<u class="ud">二重線</u>', { type: 'double' });
-      // 画像の線：太さを決めてから、画像をクリックする（画像を縦横比を保たずに細長く伸ばして、文字の下に引く）
+      // 画像の線：太さを決めてから、Finder で画像を選ぶ。一度選んだ画像（とこの文書で使っている画像の線）は、次から候補に出す
       menu.append(h('div', 'rich-menu-label', '画像の線'));
       const wRow = h('div', 'rich-menu-row');
       const w = numEl(S.lastUnderW ?? 2, '', (v) => (S.lastUnderW = +v > 0 ? +v : 2), 0.5);
@@ -2940,26 +2909,30 @@ function richEditor(value, opts, onCommit) {
       w.oninput = () => (S.lastUnderW = +w.value > 0 ? +w.value : 2);
       wRow.append(h('span', null, '太さ'), w, h('span', null, 'pt'));
       menu.append(wRow);
-      const list = h('div', 'rich-imgs');
-      list.append(h('div', 'note', '画像を読み込んでいます…'));
-      menu.append(list);
-      // フォルダの画像を読み込み、横長の画像（幅が高さの 4 倍以上）を先に並べる
-      Promise.all(S.assets.map(loadImage)).then(() => {
-        const ar = (a) => {
-          const z = S.imageSizes.get(a);
-          return z ? z.w / z.h : 0;
-        };
-        const imgs = [...new Set(S.assets)].filter((a) => S.imageURLs.get(a)).sort((x, y) => (ar(y) >= 4) - (ar(x) >= 4));
-        list.innerHTML = '';
-        if (!imgs.length) list.append(h('div', 'note', 'フォルダに画像がありません'));
-        for (const a of imgs) {
-          const b = iconBtn('rich-item rich-img', '', a, () => pickU({ type: 'img', img: a, w: S.lastUnderW ?? 2 }));
-          const line = h('span', 'line');
-          line.style.backgroundImage = `url('${S.imageURLs.get(a)}')`;
-          b.append(line, h('span', 'name', a.split('/').pop()));
-          list.append(b);
-        }
-      });
+      menu.append(iconBtn('rich-item', 'Finder から選ぶ…', '', () => {
+        const keep = saved;
+        close();
+        pickImageFile().then((path) => {
+          if (!path) return;
+          addUnderImg(path);
+          saved = keep;
+          pickU({ type: 'img', img: path, w: S.lastUnderW ?? 2 });
+        });
+      }));
+      const cands = underImgs();
+      if (cands.length) {
+        const list = h('div', 'rich-imgs');
+        menu.append(list);
+        Promise.all(cands.map(loadImage)).then(() => {
+          for (const a of cands) {
+            const b = iconBtn('rich-item rich-img', '', a, () => pickU({ type: 'img', img: a, w: S.lastUnderW ?? 2 }));
+            const line = h('span', 'line');
+            line.style.backgroundImage = `url('${S.imageURLs.get(a) || ''}')`;
+            b.append(line, h('span', 'name', a.split('/').pop()));
+            list.append(b);
+          }
+        });
+      }
     }),
     iconBtn('rich-sup', '<span>x<sup>2</sup></span>', '上付き', exec('superscript')),
     iconBtn('rich-sub', '<span>x<sub>2</sub></span>', '下付き', exec('subscript')),
@@ -2967,7 +2940,7 @@ function richEditor(value, opts, onCommit) {
 
   // 文字の色：A の帯は、いまの色（選んだ部分の色。選んでいなければボックス全体の文字の色）。
   // A か ▾ で色のメニューを開き、選んだ色を、文字を選んでいればその部分、選んでいなければボックス全体に付ける
-  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${normColor(opts.boxColor) || '#000000'}"></span>`, '文字の色', () => colorDrop.querySelector('.rich-arrow').onmousedown(new MouseEvent('mousedown')));
+  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${normColor(opts.boxColor?.()) || '#000000'}"></span>`, '文字の色', () => colorDrop.querySelector('.rich-arrow').onmousedown(new MouseEvent('mousedown')));
   const grpColor = h('span', 'rich-group');
   const colorDrop = dropMenu('文字の色', (menu, close) => {
     const sel = hasSel();
@@ -3026,15 +2999,16 @@ function richEditor(value, opts, onCommit) {
   bar.append(grpFont, sep(), grpColor, sep(), grpSize, grpPara);
   // メニューの外を押したら閉じる（欄が画面から消えたら、この見張りも外す）
   const outside = (e) => {
-    if (!wrap.isConnected) return document.removeEventListener('mousedown', outside);
+    if (!bar.isConnected) return document.removeEventListener('mousedown', outside);
     if (!e.target.closest?.('.rich-drop, .rich-colorA')) menus.forEach((m) => (m.hidden = true));
   };
   document.addEventListener('mousedown', outside);
 
   const applyColor = (value) => {
-    document.execCommand('styleWithCSS', false, true);
-    document.execCommand('foreColor', false, value);
-    document.execCommand('styleWithCSS', false, false);
+    if (!ed) return;
+    D.execCommand('styleWithCSS', false, true);
+    D.execCommand('foreColor', false, value);
+    D.execCommand('styleWithCSS', false, false);
     commit();
   };
 
@@ -3047,7 +3021,7 @@ function richEditor(value, opts, onCommit) {
       let n = r.startContainer;
       while (n && n.parentNode !== ed) n = n.parentNode;
       if (n && n !== ed) {
-        const d = document.createElement('div');
+        const d = D.createElement('div');
         n.replaceWith(d);
         d.append(n);
         out.push(d);
@@ -3058,11 +3032,12 @@ function richEditor(value, opts, onCommit) {
 
   // 選んだ部分の文字が、全部下線の中にあるか
   const allUnderlined = () => {
-    const sel = getSelection();
+    if (!ed) return false;
+    const sel = D.getSelection();
     if (!sel.rangeCount) return false;
     const r = sel.getRangeAt(0);
     if (r.collapsed || !ed.contains(r.commonAncestorContainer)) return false;
-    const w = document.createTreeWalker(r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentNode, NodeFilter.SHOW_TEXT);
+    const w = D.createTreeWalker(r.commonAncestorContainer.nodeType === 1 ? r.commonAncestorContainer : r.commonAncestorContainer.parentNode, NodeFilter.SHOW_TEXT);
     let any = false;
     for (let n = w.nextNode(); n; n = w.nextNode()) {
       if (!r.intersectsNode(n) || !n.nodeValue.replace(/\u200b/g, '')) continue;
@@ -3076,29 +3051,30 @@ function richEditor(value, opts, onCommit) {
   // 選んだ範囲の中にある同じ種類の要素は外し、外側にある同じ種類の要素からは出す（一部を選んだときは、その前後に残す）。
   // keep なら、包んだあとも同じ文字を選んだままにする
   const wrapSelection = (selector, make, keep) => {
-    const sel = getSelection();
+    if (!ed) return false;
+    const sel = D.getSelection();
     if (!sel.rangeCount) return false;
     const range = sel.getRangeAt(0);
     if (range.collapsed || !ed.contains(range.commonAncestorContainer)) return false;
     const els = [];
     for (const d of blocksIn(range)) {
-      const r = document.createRange();
+      const r = D.createRange();
       r.selectNodeContents(d);
       if (d.contains(range.startContainer)) r.setStart(range.startContainer, range.startOffset);
       if (d.contains(range.endContainer)) r.setEnd(range.endContainer, range.endOffset);
       if (r.collapsed) continue;
       const frag = r.extractContents();
       for (const x of frag.querySelectorAll(selector)) x.replaceWith(...x.childNodes);
-      const el = (make && make()) || document.createElement('span');
+      const el = (make && make()) || D.createElement('span');
       el.append(frag);
       r.insertNode(el);
       for (let o = el.parentElement?.closest(selector); o && ed.contains(o); o = el.parentElement?.closest(selector)) {
-        const rb = document.createRange();
+        const rb = D.createRange();
         rb.setStart(o, 0);
         rb.setEndBefore(el);
         const before = o.cloneNode(false);
         before.append(rb.extractContents());
-        const ra = document.createRange();
+        const ra = D.createRange();
         ra.setStartAfter(el);
         ra.setEnd(o, o.childNodes.length);
         const after = o.cloneNode(false);
@@ -3109,7 +3085,7 @@ function richEditor(value, opts, onCommit) {
     }
     // 空になった要素を消す
     for (const x of ed.querySelectorAll(selector)) if (!x.textContent) x.remove();
-    const nr = document.createRange();
+    const nr = D.createRange();
     if (keep && els.length) {
       nr.setStartBefore(els[0]);
       nr.setEndAfter(els[els.length - 1]);
@@ -3127,7 +3103,7 @@ function richEditor(value, opts, onCommit) {
   // 下線を付ける（u が null なら外す）。選んだ範囲の、すでにある下線は付け替える
   const applyUnderline = (u) => {
     const ok = wrapSelection('u', u ? () => {
-      const tmp = document.createElement('div');
+      const tmp = D.createElement('div');
       tmp.innerHTML = underlineHTML(u, '', (src) => S.imageURLs.get(src) || '');
       return tmp.firstChild;
     } : null);
@@ -3136,11 +3112,11 @@ function richEditor(value, opts, onCommit) {
 
   // 一部の文字の大きさ（pt）。ボックスの文字の大きさと同じなら、大きさの指定を外す
   const applySize = (n) => {
-    const ok = wrapSelection('span.fs', n === base ? null : () => {
-      const sp = document.createElement('span');
+    const ok = wrapSelection('span.fs', n === baseNow() ? null : () => {
+      const sp = D.createElement('span');
       sp.className = 'fs';
       sp.dataset.size = String(n);
-      sp.style.fontSize = `${+(n / base).toFixed(4)}em`;
+      sp.style.fontSize = `${n}pt`;
       return sp;
     }, true);
     if (!ok) status('大きさを変える文字を選んでください', true);
@@ -3148,7 +3124,8 @@ function richEditor(value, opts, onCommit) {
 
   // 箇条書きにする段落：カーソルのある段落（選んだ段落）。欄にカーソルが無ければ全部の段落
   const bulletTargets = () => {
-    const sel = getSelection();
+    if (!ed) return [];
+    const sel = D.getSelection();
     if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).commonAncestorContainer)) return [...ed.children];
     return blocksIn(sel.getRangeAt(0));
   };
@@ -3170,56 +3147,494 @@ function richEditor(value, opts, onCommit) {
     }
     commit();
   };
-  ed.onfocus = () => document.execCommand('defaultParagraphSeparator', false, 'div');
-  // Shift+Enter：カーソルのある段落の中に ↵ と改行を差し込み、カーソルをその直後に置く
+  // Shift+Enter：段落の中の改行（<br class="soft">）を差し込み、カーソルをその直後に置く
   const insertSoftBreak = () => {
-    const sel = getSelection();
+    const sel = D.getSelection();
     if (!sel.rangeCount) return;
-    let r = sel.getRangeAt(0);
+    const r = sel.getRangeAt(0);
     r.deleteContents();
-    if (r.startContainer === ed) {
-      // カーソルが段落の外にあるときは、直前の段落の末尾に移す
-      const div = ed.children[Math.max(0, r.startOffset - 1)] || ed.firstElementChild;
-      if (!div) return;
-      r = document.createRange();
-      r.selectNodeContents(div);
-      r.collapse(false);
-      const last = div.lastChild;
-      if (last && last.nodeName === 'BR' && !afterMark(last)) r.setStartBefore(last);
-    }
-    const sb = document.createElement('span');
-    sb.className = 'sb';
-    sb.contentEditable = 'false';
-    sb.textContent = '↵';
-    const br = document.createElement('br');
-    const z = document.createTextNode('\u200b'); // 行末の改行を見えるようにするゼロ幅の文字（書き出すときに外す）
+    const br = D.createElement('br');
+    br.className = 'soft';
+    const z = D.createTextNode('​'); // 行末の改行を見えるようにするゼロ幅の文字（書き出すときに外す）
     r.insertNode(z);
     r.insertNode(br);
-    r.insertNode(sb);
-    const nr = document.createRange();
+    const nr = D.createRange();
     nr.setStart(z, 1);
     nr.collapse(true);
     sel.removeAllRanges();
     sel.addRange(nr);
     ed.dispatchEvent(new Event('input'));
   };
-  ed.onkeydown = (e) => {
-    if (e.key === 'Enter' && e.shiftKey) {
+  // 書く欄を差し替える（プレビューを描き直したとき）。差し替えた時点の中身を、書き込み済みの中身とする
+  const attach = (el) => {
+    if (D && D !== el.ownerDocument) D.removeEventListener('selectionchange', onSel);
+    ed = el;
+    D = el.ownerDocument;
+    D.addEventListener('selectionchange', onSel);
+    last = serializeRich(ed);
+    saved = null;
+    sizeIn.value = String(baseNow());
+    ed.onfocus = () => D.execCommand('defaultParagraphSeparator', false, 'div');
+    ed.onkeydown = (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        insertSoftBreak();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        commit();
+        select(null); // 選択を外す（書くのをやめる）
+      }
+    };
+    ed.oninput = () => {
+      clearTimeout(timer);
+      timer = setTimeout(commit, 600);
+    };
+    ed.onblur = commit;
+    ed.onpaste = (e) => {
       e.preventDefault();
-      insertSoftBreak();
-    }
+      D.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+    };
   };
-  ed.oninput = () => {
+  const detach = () => {
     clearTimeout(timer);
-    timer = setTimeout(commit, 600);
+    if (D) D.removeEventListener('selectionchange', onSel);
+    if (ed) {
+      ed.onkeydown = ed.oninput = ed.onblur = ed.onpaste = ed.onfocus = null;
+    }
+    ed = null;
   };
-  ed.onblur = commit;
-  ed.onpaste = (e) => {
+  return {
+    bar,
+    attach,
+    detach,
+    commit,
+    ed: () => ed,
+    getSaved: () => saved,
+    setSaved: (r) => {
+      saved = r;
+      sizeIn.value = String(sizeAt(r));
+      tellSel();
+    },
+    // ボックス全体の色・大きさが変わったとき、ボタンの表示を合わせる
+    refresh: () => {
+      if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
+      tellSel();
+    },
+  };
+}
+
+// ---------------------------------------------------------------- サポートパネル・プレビューに直接書く
+// ボックスを 1 つ選ぶと、プレビューのボックスにそのまま文字を書ける（クリックした位置にカーソルを置く）。
+// 選んでいるあいだ、ボックスに重ならない近くに、文字の書式のパネル（サポートパネル）を出す。ドラッグで動かせ、選択を外すと消える。
+// 文字は、書いている途中は layout.yaml にだけ書き、プレビューは描き直さない（描き直すと書く欄が作り直されるため）。
+// 書き終えたとき（選択を外したとき・別のボックスを選んだとき）に描き直し、文字の高さにボックスを合わせる
+
+// 一度 Finder で選んだ画像の線の画像（次から候補に出す）。ブラウザに覚えておき、この文書で使っている画像の線も候補にする
+function underImgs() {
+  let saved = [];
+  try {
+    saved = JSON.parse(localStorage.getItem('slideCreator.underImgs') || '[]');
+  } catch {
+    saved = [];
+  }
+  const used = new Set();
+  for (const f of Object.values(S.files)) {
+    for (const m of String(f.text || '').matchAll(/<u\s[^>]*img\s*=\s*\\?"([^"\\]+)\\?"/gi)) used.add(m[1]);
+  }
+  return [...new Set([...saved.filter((p) => S.assets.includes(p) || used.has(p)), ...used])];
+}
+function addUnderImg(path) {
+  try {
+    const cur = JSON.parse(localStorage.getItem('slideCreator.underImgs') || '[]');
+    localStorage.setItem('slideCreator.underImgs', JSON.stringify([path, ...cur.filter((p) => p !== path)].slice(0, 20)));
+  } catch {
+    // 覚えられなくても、この場では使える
+  }
+}
+
+// 書く欄の中の範囲 ↔ 先頭から何文字目か（プレビューを描き直したあと、同じ位置にカーソルを戻すため）
+function offsetsIn(ed) {
+  const sel = ed.ownerDocument.getSelection();
+  if (!sel.rangeCount || !ed.contains(sel.getRangeAt(0).startContainer)) return null;
+  const r = sel.getRangeAt(0);
+  const off = (node, o) => {
+    const x = ed.ownerDocument.createRange();
+    x.setStart(ed, 0);
+    x.setEnd(node, o);
+    return x.toString().length;
+  };
+  return { start: off(r.startContainer, r.startOffset), end: off(r.endContainer, r.endOffset) };
+}
+function rangeAt(ed, pos) {
+  const D = ed.ownerDocument;
+  const at = (n, isStart) => {
+    const w = D.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+    let last = null;
+    for (let t = w.nextNode(); t; t = w.nextNode()) {
+      if (isStart ? n < t.nodeValue.length : n <= t.nodeValue.length) return [t, n];
+      n -= t.nodeValue.length;
+      last = t;
+    }
+    return last ? [last, last.nodeValue.length] : [ed.lastElementChild || ed, 0];
+  };
+  const r = D.createRange();
+  r.setStart(...at(pos.start, pos.start < pos.end));
+  r.setEnd(...at(pos.end, false));
+  return r;
+}
+
+// 選んだボックスの文字の要素を、書ける状態にする。how.point（プレビューの中の位置）か how.pos（何文字目か）にカーソルを置く
+function startInline(how = {}) {
+  const sp = S.support;
+  if (!sp || S.layer !== 'main') return;
+  const doc = $('#frame').contentDocument;
+  const el = doc && [...doc.querySelectorAll('.txt')].find((x) => x.dataset.path === sp.path);
+  const ed = el?.firstElementChild;
+  if (!ed) return;
+  if (S.inline?.ed === ed) return placeCaret(ed, how);
+  ed.contentEditable = 'true';
+  ed.spellcheck = false;
+  ed.classList.add('ied');
+  sp.ctl.attach(ed);
+  S.inline = { path: sp.path, ed };
+  placeCaret(ed, how);
+}
+function placeCaret(ed, how) {
+  const D = ed.ownerDocument;
+  let r = null;
+  if (how.point) {
+    r = D.caretRangeFromPoint(how.point.x, how.point.y);
+    if (r && !ed.contains(r.startContainer)) r = null;
+  }
+  if (!r && how.pos) r = rangeAt(ed, how.pos);
+  if (!r && (how.point || how.focus)) {
+    r = D.createRange();
+    r.selectNodeContents(ed.lastElementChild || ed);
+    r.collapse(false);
+  }
+  if (how.focus === false && !how.point) {
+    if (r) {
+      D.getSelection().removeAllRanges();
+      D.getSelection().addRange(r);
+    }
+    return;
+  }
+  const frame = $('#frame');
+  if (document.activeElement !== frame) frame.focus({ preventScroll: true });
+  ed.focus({ preventScroll: true });
+  if (r) {
+    D.getSelection().removeAllRanges();
+    D.getSelection().addRange(r);
+  }
+}
+
+// 書くのを終える。書いた文字を書き込み、プレビューを描き直して、文字の高さにボックスを合わせる
+function finishInline() {
+  const inl = S.inline;
+  if (!inl) return;
+  S.inline = null;
+  const box = findBox(inl.path);
+  if (box && (box.kind === 'text' || box.kind === 'empty')) S.pendingFit = [inl.path];
+  const before = S.histI;
+  S.support?.ctl.commit(); // S.inline を外してから書き込むので、プレビューも描き直す
+  S.support?.ctl.detach();
+  inl.ed.contentEditable = 'false';
+  inl.ed.classList.remove('ied');
+  if (S.histI === before && S.inlineDirty) renderPreview(); // 書き込みは済んでいて、描き直しだけが残っている
+  S.inlineDirty = false;
+}
+
+// 選択に合わせて、サポートパネルを出す・消す・置き直す（applyView のたびに呼ぶ）
+function syncSupport() {
+  const one = S.layer === 'main' && S.selected ? findBox(S.selected) : null;
+  if (!one || !one.src || !isLeaf(one)) return closeSupport();
+  if (!S.support || S.support.path !== one.path || S.support.stale) buildSupport(one);
+  positionSupport();
+}
+function closeSupport() {
+  if (!S.support) return;
+  S.support.ctl.detach();
+  S.support.el.remove();
+  S.support = null;
+}
+
+// パネルを、ボックスに重ならない近くに置く（下・上・右・左の順に、入る所）。ドラッグで動かしたあとは、その位置のまま
+function positionSupport() {
+  const sp = S.support;
+  if (!sp || sp.moved) return;
+  const box = findBox(sp.path);
+  const frame = $('#frame');
+  const win = frame.contentWindow;
+  if (!box || !S.view || !win) return;
+  const fr = frame.getBoundingClientRect();
+  const { s, offX, offY } = S.view;
+  const k = S.ppu * s;
+  const bx = fr.left + offX + box.rect.x * k - win.scrollX;
+  const by = fr.top + offY + box.rect.y * k - win.scrollY;
+  const bw = box.rect.w * k;
+  const bh = box.rect.h * k;
+  const pw = sp.el.offsetWidth;
+  const ph = sp.el.offsetHeight;
+  const m = 10;
+  const fits = (x, y) => x >= fr.left && y >= fr.top && x + pw <= fr.right && y + ph <= fr.bottom;
+  const clampX = (x) => Math.max(fr.left + 4, Math.min(x, fr.right - pw - 4));
+  const clampY = (y) => Math.max(fr.top + 4, Math.min(y, fr.bottom - ph - 4));
+  const cands = [
+    [clampX(bx), by + bh + m],
+    [clampX(bx), by - ph - m],
+    [bx + bw + m, clampY(by)],
+    [bx - pw - m, clampY(by)],
+  ];
+  const [x, y] = cands.find(([cx, cy]) => fits(cx, cy)) || [clampX(bx), clampY(by + bh + m)];
+  sp.el.style.left = `${Math.round(x)}px`;
+  sp.el.style.top = `${Math.round(y)}px`;
+}
+
+function buildSupport(box) {
+  closeSupport();
+  const path = box.path;
+  const cur = () => findBox(path);
+  const node = () => cur()?.node || {};
+  const inh = () => cur()?.inherited || {};
+  const font = () => ({ ...(inh().font || {}), ...(node().font || {}) });
+  // 書式を変えると文字の高さが変わりうるので、描き直したあとにボックスを合わせる（文字のボックスだけ）
+  const set = (k, v) => {
+    const b = cur();
+    if (!b) return;
+    if (b.kind === 'text') S.pendingFit = [b.path];
+    return editOne(b, k, v);
+  };
+  const el = h('div', 'support');
+  const head = h('div', 'support-head');
+  head.append(h('span', 'grip', '⋮⋮'), h('span', 'support-title', '書式'));
+  // 文字の書式の道具。文字を選んでいなければ、ボックス全体の大きさ・色・太字・斜体を変える
+  const ctl = textCtl({
+    base: () => font().size ?? DEFAULT_SIZE,
+    boxColor: () => font().color,
+    onBaseSize: (n) => set(['font', 'size'], n),
+    onBoxColor: (c) => set(['font', 'color'], c || undefined),
+    onBoxToggle: (k) => set(['font', k], font()[k] ? undefined : true),
+  }, (v) => {
+    const b = cur();
+    if (!b) return;
+    // 書いている途中は、プレビューを描き直さない（書く欄が作り直されるため）。描き直しは書き終えたときにする
+    if (S.inline) {
+      S.skipPreview = true;
+      S.inlineDirty = true;
+    }
+    const empty = !v.replace(/<[^>]*>/g, '').trim() && !/<li/.test(v);
+    editOne(b, 'text', empty && b.kind !== 'text' ? undefined : v);
+  });
+  // 光彩（文字の周りをぼかした色で縁取る）。押すと付ける・外す
+  const glowBtn = h('button', 'rich-btn rich-glow');
+  glowBtn.type = 'button';
+  glowBtn.innerHTML = '<span>A</span>';
+  glowBtn.title = '光彩（もう一度押すと外す）';
+  glowBtn.classList.toggle('on', !!font().glow);
+  glowBtn.onmousedown = (e) => {
     e.preventDefault();
-    document.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+    set(['font', 'glow'], font().glow ? undefined : true);
   };
-  wrap.append(bar, ed, h('div', 'rich-legend', '¶ 段落の区切り（Enter）　↵ 段落の中の改行（Shift+Enter）'));
-  return wrap;
+  // 画像：▾ で、Finder から選ぶか、フォルダの画像を選ぶ。画像は文字の裏に置く
+  const imgWrap = h('span', 'rich-drop');
+  const imgBtn = h('button', 'rich-btn rich-image');
+  imgBtn.type = 'button';
+  imgBtn.title = '画像（文字の裏に置く）';
+  imgBtn.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="1.5"/><circle cx="9" cy="10" r="1.8"/><path d="M4 18l5-5 3 3 3-4 5 6"/></svg><span class="arr">▾</span>';
+  const imgMenu = h('div', 'rich-menu');
+  imgMenu.hidden = true;
+  const setImage = (p) => {
+    imgMenu.hidden = true;
+    const b = cur();
+    if (!b) return;
+    const pairs = [['image', p]];
+    if (node().crop != null) pairs.push(['crop', undefined]);
+    editMany(b, pairs).then(() => p && status(S.pickMsg || ''));
+  };
+  imgBtn.onmousedown = (e) => {
+    e.preventDefault();
+    if (!imgMenu.hidden) return (imgMenu.hidden = true);
+    imgMenu.innerHTML = '';
+    const item = (html, fn) => {
+      const b = h('button', 'rich-btn rich-item');
+      b.type = 'button';
+      b.innerHTML = html;
+      b.onmousedown = (ev) => {
+        ev.preventDefault();
+        fn();
+      };
+      imgMenu.append(b);
+      return b;
+    };
+    item('Finder から選ぶ…', () => {
+      imgMenu.hidden = true;
+      pickImageFile().then((p) => p && setImage(p));
+    });
+    if (node().image != null) item('画像を外す', () => setImage(undefined));
+    const list = h('div', 'rich-imgs');
+    imgMenu.append(list);
+    const imgs = [...new Set(S.assets)];
+    if (!imgs.length) list.append(h('div', 'note', 'フォルダに画像がありません'));
+    Promise.all(imgs.map(loadImage)).then(() => {
+      for (const a of imgs) {
+        if (!S.imageURLs.get(a)) continue;
+        const b = h('button', 'rich-btn rich-item rich-thumb');
+        b.type = 'button';
+        b.title = a;
+        const im = document.createElement('img');
+        im.src = S.imageURLs.get(a);
+        b.append(im, h('span', 'name', a.split('/').pop()));
+        b.onmousedown = (ev) => {
+          ev.preventDefault();
+          setImage(a);
+        };
+        list.append(b);
+      }
+    });
+    imgMenu.hidden = false;
+  };
+  imgWrap.append(imgBtn, imgMenu);
+  ctl.bar.append(h('span', 'rich-sep'), glowBtn, imgWrap);
+  document.addEventListener('mousedown', function outside(e) {
+    if (!el.isConnected) return document.removeEventListener('mousedown', outside);
+    if (!e.target.closest?.('.rich-drop')) imgMenu.hidden = true;
+  });
+
+  // そのほかの文字の設定（左の欄から移した）。開くかどうかは覚えておく
+  const more = document.createElement('details');
+  more.className = 'support-more';
+  try {
+    more.open = localStorage.getItem('slideCreator.supportMore') === '1';
+  } catch {
+    more.open = false;
+  }
+  more.ontoggle = () => {
+    try {
+      localStorage.setItem('slideCreator.supportMore', more.open ? '1' : '0');
+    } catch {
+      // 覚えられなくてもよい
+    }
+    positionSupport();
+  };
+  more.append(h('summary', null, 'そのほかの文字の設定'));
+  const b0 = cur();
+  const n0 = node();
+  const f0 = font();
+  const i0 = inh();
+  more.append(
+    row('フォント（英語）', selectEl(FONT_OPTS, f0.family ?? DEFAULT_FONT, (v) => set(['font', 'family'], v))),
+    row('フォント（日本語）', selectEl(JA_FONT_OPTS, f0.family_ja ?? DEFAULT_FONT_JA, (v) => set(['font', 'family_ja'], v))),
+    fullRow(pairLine(
+      ['揃え方（横）', selectEl(H_OPTS, n0.align ?? i0.align ?? 'left', (v) => set('align', v))],
+      ['揃え方（縦）', selectEl(V_OPTS, n0.valign ?? i0.valign ?? 'top', (v) => set('valign', v))],
+    )),
+    fullRow(pairLine(
+      ['行間', numEl(n0.line_height ?? i0.line_height ?? 1.2, '', (v) => +v > 0 && set('line_height', +v), 0.05), '倍'],
+      ['段落の間隔', numEl(n0.para_space ?? i0.para_space ?? 0, '', (v) => set('para_space', +v > 0 ? +v : undefined)), 'pt'],
+    )),
+    ...textBgRows(b0, n0, (b, k, v) => set(k, v)),
+    row('光彩の色', h2(colorEl(typeof f0.glow === 'object' ? f0.glow.color : f0.glow ? '#ffffff' : '', (v) => set(['font', 'glow'], v ? { ...(typeof f0.glow === 'object' ? f0.glow : {}), color: v } : undefined)))),
+    row('見出しアイコン', h2(
+      selectEl([['', 'なし'], ...[...new Set([...S.assets, ...(n0.icon ? [String(n0.icon)] : [])])].map((a) => [a, a.split('/').pop()])], n0.icon ?? '', (v) => set('icon', v || undefined)),
+      pickBtn((p) => set('icon', p)),
+    )),
+    ...(n0.icon ? [row('アイコンの大きさ', h2(numEl(n0.icon_size ?? f0.size ?? DEFAULT_SIZE, '', (v) => +v > 0 && set('icon_size', +v)), 'pt'))] : []),
+    row('', checkEl('テキストの下に生じた余白を別のボックスにする', n0.split_below !== false, (x) => {
+      const b = cur();
+      if (!b) return;
+      if (x) {
+        S.pendingFit = [b.path];
+        return editOne(b, 'split_below', undefined);
+      }
+      return unfitTextBelow(b);
+    })),
+  );
+  el.append(head, ctl.bar, more);
+  document.body.append(el);
+  S.support = { path, el, ctl, moved: false };
+
+  // ドラッグで動かす（つまみを持って動かす）
+  head.onpointerdown = (e) => {
+    e.preventDefault();
+    head.setPointerCapture(e.pointerId);
+    const r = el.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    head.onpointermove = (ev) => {
+      S.support.moved = true;
+      el.style.left = `${Math.round(ev.clientX - dx)}px`;
+      el.style.top = `${Math.round(ev.clientY - dy)}px`;
+    };
+    head.onpointerup = () => {
+      head.onpointermove = head.onpointerup = null;
+    };
+  };
+  queueMicrotask(fitSupportLabels);
+}
+
+// パネルの中の名前の列の幅を、いちばん長い名前に合わせる
+function fitSupportLabels() {
+  const more = S.support?.el.querySelector('.support-more');
+  if (!more) return;
+  let w = 0;
+  for (const l of more.querySelectorAll('.row > label')) w = Math.max(w, l.scrollWidth);
+  more.style.setProperty('--label-w', `${Math.ceil(w) + 8}px`);
+}
+
+// ---------------------------------------------------------------- 分割（マス目）
+// 分割ボタンを押すと、下にマス目を出す。マウスを乗せた範囲の「行 × 列」に分ける（PowerPoint の表の挿入と同じ）
+const SPLIT_MAX = { rows: 8, cols: 10 };
+function openSplitGrid() {
+  const btnEl = $('#btn-split');
+  let pop = $('#split-grid');
+  if (pop && !pop.hidden) return (pop.hidden = true);
+  const box = S.selected ? findBox(S.selected) : null;
+  if (!box || !box.src) return;
+  if (!pop) {
+    pop = h('div', 'split-grid');
+    pop.id = 'split-grid';
+    document.body.append(pop);
+    document.addEventListener('mousedown', (e) => {
+      if (!pop.hidden && !e.target.closest?.('#split-grid, #btn-split')) pop.hidden = true;
+    });
+  }
+  pop.innerHTML = '';
+  const label = h('div', 'split-label', '分割');
+  const grid = h('div', 'split-cells');
+  grid.style.gridTemplateColumns = `repeat(${SPLIT_MAX.cols}, 18px)`;
+  const cells = [];
+  const show = (r, c) => {
+    label.textContent = r && c ? `${r} 行 × ${c} 列` : '分割';
+    for (const x of cells) x.el.classList.toggle('on', x.r <= r && x.c <= c);
+  };
+  for (let r = 1; r <= SPLIT_MAX.rows; r++) {
+    for (let c = 1; c <= SPLIT_MAX.cols; c++) {
+      const cell = h('span', 'split-cell');
+      cell.onmouseenter = () => show(r, c);
+      cell.onmousedown = (e) => {
+        e.preventDefault();
+        pop.hidden = true;
+        if (r * c > 1) splitGrid(findBox(S.selected) || box, r, c);
+      };
+      cells.push({ el: cell, r, c });
+      grid.append(cell);
+    }
+  }
+  grid.onmouseleave = () => show(0, 0);
+  pop.append(label, grid);
+  const b = btnEl.getBoundingClientRect();
+  pop.style.left = `${Math.round(b.left)}px`;
+  pop.style.top = `${Math.round(b.bottom + 4)}px`;
+  pop.hidden = false;
+}
+
+// r 行 × c 列に分ける。1 行か 1 列なら、その向きだけに分ける。両方なら、上下に r 段に分け、各段を左右に c 個に分ける
+function splitGrid(box, r, c) {
+  if (!box?.src) return;
+  setSel([]);
+  if (r === 1) return splitBox(box, 'cols', c);
+  if (c === 1) return splitBox(box, 'rows', r);
+  return splitBox(box, 'rows', r, c);
 }
 
 // その <br> が ↵ の直後にあるか（間の空の文字の節は読み飛ばす）
@@ -3249,8 +3664,9 @@ function serializeRich(root) {
       else if (c.nodeType === 1) {
         if (c.classList?.contains('sb')) continue;
         if (c.nodeName === 'BR') {
-          // ↵ の直後の <br> だけが段落の中の改行。ほかの <br> は空の行を保つための置き物
-          if (afterMark(c)) out += '<br>';
+          // ↵ の直後の <br> と、<br class="soft">（プレビューに直接書くときの段落の中の改行）だけが段落の中の改行。
+          // ほかの <br> は空の行を保つための置き物
+          if (afterMark(c) || c.classList?.contains('soft')) out += '<br>';
           continue;
         }
         const t = TAGS[c.nodeName];
@@ -4090,23 +4506,6 @@ function clearSelection() {
   });
 }
 
-// 選択中のボックスを分割する（分割数と、上下か左右かを選ぶ）
-function openSplitDialog() {
-  const box = S.selected ? findBox(S.selected) : null;
-  if (!box || !box.src) return;
-  const dlg = $('#split-dialog');
-  // ボタンを押したその場で分割する（close の知らせは、画面が隠れていると遅れることがある）
-  const run = (dir) => {
-    const n = Math.max(2, Math.min(12, parseInt($('#split-n').value, 10) || 2));
-    dlg.close();
-    setSel([]);
-    splitBox(box, dir, n);
-  };
-  $('#split-rows').onclick = () => run('rows');
-  $('#split-cols').onclick = () => run('cols');
-  $('#split-cancel').onclick = () => dlg.close();
-  dlg.showModal();
-}
 
 $('#btn-open').onclick = async () => {
   try {
@@ -4125,7 +4524,7 @@ $('#btn-open').onclick = async () => {
 $('#btn-save').onclick = save;
 $('#btn-pptx').onclick = exportPPTX;
 $('#btn-pdf').onclick = exportPDF;
-$('#btn-split').onclick = openSplitDialog;
+$('#btn-split').onclick = openSplitGrid;
 $('#btn-merge').onclick = () => mergeSelection();
 $('#btn-dup').onclick = () => duplicateRow();
 $('#btn-delete').onclick = () => removeSelection();

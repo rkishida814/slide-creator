@@ -91,8 +91,13 @@ function walk(node, rect, inherited, autoPath, ctx, depth, parent) {
 
   if (kind === 'split') return layoutSplit(node, inner, style, path, ctx, depth);
   if (kind === 'grid') return layoutGrid(node, inner, style, path, ctx, depth);
-  if (kind === 'image') return layoutImage(node, inner, style, path, ctx);
-  if (kind === 'text') return layoutText(node, inner, style, path, ctx);
+  // 画像は文字の裏に置く（画像と文字を 1 つのボックスに入れられる）。
+  // 文字の無いボックス（空き・画像だけ）にも、空の文字の要素を置く（画面で、クリックしてそのまま書き込むため）
+  if (kind === 'image') layoutImage(node, inner, style, path, ctx);
+  if (kind === 'text' || kind === 'image' || kind === 'empty') {
+    if (ctx.bg && node.text == null) return; // 背景を分けた木の枠には置かない
+    return layoutText(node.text == null ? { ...node, text: '' } : node, inner, style, path, ctx);
+  }
 }
 
 // split: rows（上下に並べる）/ cols（左右に並べる）。

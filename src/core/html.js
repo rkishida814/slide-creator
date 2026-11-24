@@ -178,7 +178,7 @@ function renderElement(e, L, opts) {
       ...(glowOf(f) ? [`text-shadow:${glowCSS(glowOf(f))}`] : []),
     ].join(';');
     const paras = paragraphs(e.text)
-      .map((p, i) => `<div class="pa${{ normal: ' li', hidden: ' li lih' }[bulletType(p)] || ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br>', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
+      .map((p, i) => `<div class="pa${{ normal: ' li', hidden: ' li lih' }[bulletType(p)] || ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br class="soft">', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
       .join('');
     const tb = e.text_bg;
     const tbAttr = tb

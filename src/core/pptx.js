@@ -55,6 +55,7 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
           altText: e.path,
         });
       } else if (e.type === 'text') {
+        if (!String(e.text).trim() && !e.text_bg) continue; // 文字の無いボックスの、空の文字の要素は出さない
         const f = e.font;
         const g = glowOf(f);
         const glow = g ? { color: hex(g.color, 'FFFFFF'), size: g.size, opacity: g.opacity } : undefined;
