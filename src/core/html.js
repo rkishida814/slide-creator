@@ -132,7 +132,7 @@ html, body { margin: 0; padding: 0; background: #fff; }
 u.ud { text-decoration-style: double; }
 u.ui { text-decoration: none; background-repeat: no-repeat; background-position: 0 100%; -webkit-box-decoration-break: clone; box-decoration-break: clone; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 .missing { background: repeating-linear-gradient(45deg, #fdd, #fdd 10px, #fff 10px, #fff 20px); }
-.ol { border: 1px dashed rgba(220, 0, 80, .8); pointer-events: none; }
+.ol { border: 1px dashed rgba(128, 128, 128, .8); pointer-events: none; }
 .ol span { position: absolute; left: 0; top: 0; background: rgba(220, 0, 80, .85); color: #fff; padding: 0 .3em; font-family: sans-serif; line-height: 1.3; }
 </style></head>
 <body>
