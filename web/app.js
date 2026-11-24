@@ -121,7 +121,8 @@ function layoutSig() {
   const s = realSlide();
   if (!s) return '';
   const r = (x) => [x.x, x.y, x.w, x.h].map((v) => v.toFixed(2)).join(',');
-  return [...s.boxes.map((b) => `${b.path}:${b.kind}:${r(b.rect)}`), ...s.elements.filter((e) => e.type !== 'text').map((e) => `${e.type}:${e.path}:${r(e.rect)}`)].join('|');
+  // 種類（空き→テキスト）だけが変わったときは、描き直さない（空きのボックスに書き始めたとき）
+  return [...s.boxes.map((b) => `${b.path}:${r(b.rect)}`), ...s.elements.filter((e) => e.type !== 'text').map((e) => `${e.type}:${e.path}:${r(e.rect)}`)].join('|');
 }
 
 async function rebuild() {
@@ -3576,10 +3577,11 @@ function positionSupport() {
 // 書いている文字のカーソルの位置（画面の座標）。書いていなければ null
 function caretRect(fr) {
   const ed = S.inline?.ed;
-  if (!ed) return null;
+  // 描き直す前の古いプレビューにある書く欄では測らない（その文書はもう使えない）
+  if (!ed || ed.ownerDocument !== $('#frame').contentDocument) return null;
   const sel = ed.ownerDocument.getSelection();
   let r = null;
-  if (sel.rangeCount && ed.contains(sel.getRangeAt(0).endContainer)) {
+  if (sel && sel.rangeCount && ed.contains(sel.getRangeAt(0).endContainer)) {
     const rg = sel.getRangeAt(0).cloneRange();
     rg.collapse(false);
     r = rg.getClientRects()[0] || (rg.endContainer.nodeType === 1 ? rg.endContainer.getBoundingClientRect() : rg.endContainer.parentElement?.getBoundingClientRect());
@@ -3650,6 +3652,8 @@ function buildSupport(box) {
     Promise.resolve(done).then(() => {
       const inl = S.inline;
       const r = inl && inl.path === b.path && findBox(b.path)?.kind === 'text' ? fitTextBelow(b.path, inl.ed.ownerDocument) : null;
+      // 書き込みと同時に描き直しが入った（書く欄を作り直している）ときは、描き直したあとに合わせる
+      if (!inl && S.inlineRestore?.path === b.path) S.pendingFit = [b.path];
       // 合わせなかった（描き直さない）ときは、待たせていた文字をすぐ入れる。合わせたときは、描き直したあとに入れる
       if (!r) releaseFit();
     });
