@@ -1,5 +1,5 @@
 # slide-creator の設定ファイル。書き方は README.md を参照。
-canvas: {width: 32, height: 18, unit: cm}   # 16:9
+canvas: {width: 32, height: 24, unit: cm}   # 4:3
 
 defaults:
   font: {size: 24, family: Helvetica, family_ja: BIZ UDゴシック}

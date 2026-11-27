@@ -4,7 +4,7 @@
 // ファイルに依存しない。Node・ブラウザの両方から使う。
 import { PER_INCH } from './units.js';
 import { DEFAULT_FONT, DEFAULT_FONT_JA, pptxFontName, glowOf } from './html.js';
-import { parseRich, hasRich, paragraphs, bulletType } from './richtext.js';
+import { parseRich, hasRich, paragraphs, bulletType, paraSpaceOf } from './richtext.js';
 
 const hex = (c, fb) => {
   if (!c) return fb;
@@ -125,7 +125,8 @@ function textRuns(text, f, paraSpace, glow, size = 24, lineHeight = 1.2) {
         continue;
       }
       const options = {};
-      if (glow) options.glow = glow;
+      if (g.glow) options.glow = { color: hex(g.glow.color, 'FFFFFF'), size: g.glow.size, opacity: g.glow.opacity };
+      else if (glow) options.glow = glow;
       if (g.b || f.bold) options.bold = true;
       if (g.i || f.italic) options.italic = true;
       if (g.color) options.color = g.color;
@@ -139,7 +140,8 @@ function textRuns(text, f, paraSpace, glow, size = 24, lineHeight = 1.2) {
     }
     if (soft) runs.push({ text: '', options: { softBreakBefore: true } });
     if (runs.length === start) runs.push({ text: '', options: {} }); // 空の段落
-    if (pi > 0 && paraSpace > 0) runs[start].options.paraSpaceBefore = paraSpace;
+    const ps = paraSpaceOf(p) ?? paraSpace;
+    if (pi > 0 && ps > 0) runs[start].options.paraSpaceBefore = ps;
     // 一部の文字の大きさを変えた段落は、いちばん大きい文字に合わせて行の間隔を決める（画面と同じ）
     const big = Math.max(0, ...parseRich(p).map((g) => g.size || 0));
     if (big > size) for (let i = start; i < runs.length; i++) runs[i].options.lineSpacing = Math.round(big * lineHeight * 100) / 100;

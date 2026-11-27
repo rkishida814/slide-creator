@@ -1,8 +1,8 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
 import { layoutDoc, ARROW_DEFAULT } from '../src/core/layout.js';
-import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, measureTextBgs, hasTextBg, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA, JA_CHARS } from '../src/core/html.js';
-import { richToHTML, paragraphs, bulletType, underlineHTML } from '../src/core/richtext.js';
+import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, measureTextBgs, hasTextBg, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA, JA_CHARS, glowOf } from '../src/core/html.js';
+import { richToHTML, paragraphs, bulletType, underlineHTML, paraSpaceOf, glowTag } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, imagePadding, parseBox, isBgTree } from '../src/core/units.js';
 import { FolderSource, UrlSource, download } from './source.js';
@@ -2041,7 +2041,8 @@ function renderPropsInner() {
   // 枠
   const fsBox = fieldset('余白・背景・枠線');
   fsBox.append(
-    paddingRow(box, node),
+    // 文字を書けるボックス（書式パネルを出すボックス）の余白は、書式パネルの余白の欄で変える
+    ...(S.layer === 'main' && box.src && isLeaf(box) ? [] : [paddingRow(box, node)]),
     ...(isBgTree(node.background)
       ? [row('背景', h('span', 'note', '分けて設定している（「背景を編集」で変える）'))]
       : bgRows(node.background, (v) => edit(box, 'background', v), { rect: box.rect })),
@@ -3233,6 +3234,7 @@ function textCtl(opts, onCommit) {
     saved = sel.getRangeAt(0).cloneRange();
     if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
     tellSel();
+    opts.onSelChange?.();
     // パネルをカーソルの右に置いているときは、カーソルが動いたら追いかける
     if (S.support?.atCaret) requestAnimationFrame(positionSupport);
   };
@@ -3323,7 +3325,8 @@ function textCtl(opts, onCommit) {
 
   // 文字の色：A の帯は、いまの色（選んだ部分の色。選んでいなければボックス全体の文字の色）。
   // A か ▾ で色のメニューを開き、選んだ色を、文字を選んでいればその部分、選んでいなければボックス全体に付ける
-  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${normColor(opts.boxColor?.()) || '#000000'}"></span>`, '文字の色', () => colorDrop.querySelector('.rich-arrow').onmousedown(new MouseEvent('mousedown')));
+  let colorArrow = null;
+  const colorA = iconBtn('rich-colorA', `<span class="a">A</span><span class="bar" style="background:${normColor(opts.boxColor?.()) || '#000000'}"></span>`, '文字の色', () => colorArrow.onmousedown(new MouseEvent('mousedown')));
   const grpColor = h('span', 'rich-group');
   const colorDrop = dropMenu('文字の色', (menu, close) => {
     const sel = hasSel();
@@ -3361,7 +3364,10 @@ function textCtl(opts, onCommit) {
       tellSel();
     }));
   });
-  grpColor.append(colorA, colorDrop);
+  // ▾ は出さず、A を押して色のメニューを開く（A を ▾ の位置に置き、メニューを A の下に開く）
+  colorArrow = colorDrop.querySelector('.rich-arrow');
+  colorDrop.querySelector('.rich-arrow').replaceWith(colorA);
+  grpColor.append(colorDrop);
 
   // 箇条書き：カーソルのある段落（選んだ段落）の行頭に「•」を付ける。もう一度押すと外す
   const bulletIcon = '<svg viewBox="0 0 20 16" width="20" height="16"><g fill="currentColor"><circle cx="2.5" cy="3" r="1.6"/><circle cx="2.5" cy="8" r="1.6"/><circle cx="2.5" cy="13" r="1.6"/></g><g stroke="currentColor" stroke-width="1.6"><path d="M7 3h12M7 8h12M7 13h12"/></g></svg>';
@@ -3505,6 +3511,106 @@ function textCtl(opts, onCommit) {
     if (!ok) status('大きさを変える文字を選んでください', true);
   };
 
+  // 段落の間隔を変える段落：選んだ範囲が複数の段落にまたがれば、その範囲の中の段落どうしの間（2 つ目以降の段落の前）。
+  // 1 つの段落の中なら、その段落の前。書く欄に範囲もカーソルも無ければ null（ボックス全体の段落の間隔を変える）
+  const spaceTargets = () => {
+    if (!ed || !saved || !ed.contains(saved.commonAncestorContainer)) return null;
+    const ds = blocksIn(saved);
+    if (!ds.length) return null;
+    return ds.length > 1 ? ds.slice(1) : ds;
+  };
+  // 選んだ段落の間隔（pt）。段落に書いていなければ、ボックスの段落の間隔。そろっていなければ ''
+  const paraSpaceAt = () => {
+    const ds = spaceTargets();
+    if (!ds) return null;
+    const vs = [...new Set(ds.map((d) => (d.dataset.space != null && d.dataset.space !== '' ? +d.dataset.space : opts.boxParaSpace?.() ?? 0)))];
+    return vs.length === 1 ? vs[0] : '';
+  };
+  // 選んだ段落の間隔を n（pt）にする。ボックスの段落の間隔と同じなら、段落に書いた間隔を外す。段落を選んでいなければ false
+  const applyParaSpace = (n) => {
+    const ds = spaceTargets();
+    if (!ds) return false;
+    const box = opts.boxParaSpace?.() ?? 0;
+    for (const d of ds) {
+      if (n === box) delete d.dataset.space;
+      else d.dataset.space = String(n);
+      d.style.marginTop = d === ed.firstElementChild ? '' : `${n}pt`;
+    }
+    commit();
+    return true;
+  };
+
+  // コピー：選んだ部分を、飾り（下付き・色・大きさ・光彩など）ごと覚える。
+  // 選んだ部分を囲む飾り（段落の中で、選んだ部分の外側にある <sub> など）も含める。ボックス全体の飾り（太字・斜体・色・光彩）も一緒に覚え、
+  // 貼り付ける先のボックスと違えば、貼り付けた部分に付ける
+  const CLIP_TYPE = 'application/x-slide-creator-rich';
+  const copyRich = (e) => {
+    const sel = D.getSelection();
+    if (!sel.rangeCount) return false;
+    const r = sel.getRangeAt(0);
+    if (r.collapsed || !ed.contains(r.commonAncestorContainer)) return false;
+    let node = r.cloneContents();
+    let anc = r.commonAncestorContainer;
+    if (anc.nodeType !== 1) anc = anc.parentNode;
+    for (let a = anc; a && a !== ed && a.parentNode !== ed; a = a.parentNode) {
+      const c = a.cloneNode(false);
+      c.append(node);
+      node = c;
+    }
+    const tmp = D.createElement('div');
+    tmp.append(node);
+    const clip = { rich: serializeRich(tmp), font: opts.boxFont?.() || {}, plain: sel.toString() };
+    S.richClip = clip;
+    e.clipboardData.setData('text/plain', clip.plain);
+    e.clipboardData.setData(CLIP_TYPE, JSON.stringify(clip));
+    e.preventDefault();
+    return true;
+  };
+  // 貼り付け：この道具でコピーした文字なら、飾りごと入れる。ほかから来た文字は、飾りを外して入れる
+  const pasteRich = (e) => {
+    e.preventDefault();
+    const plainIn = e.clipboardData.getData('text/plain');
+    let clip = null;
+    try {
+      clip = JSON.parse(e.clipboardData.getData(CLIP_TYPE) || 'null');
+    } catch {
+      clip = null;
+    }
+    if (!clip && S.richClip && S.richClip.plain === plainIn) clip = S.richClip;
+    if (!clip?.rich) return D.execCommand('insertText', false, plainIn);
+    // ボックス全体の飾りのうち、貼り付ける先のボックスと違うものを、貼り付ける文字に付ける
+    const src = clip.font || {};
+    const tgt = opts.boxFont?.() || {};
+    const hx = (c) => normColor(c)?.slice(1).toUpperCase() || null;
+    let open = '';
+    let close = '';
+    const wrap = (o, c) => {
+      open += o;
+      close = c + close;
+    };
+    if (src.bold && !tgt.bold) wrap('<b>', '</b>');
+    if (src.italic && !tgt.italic) wrap('<i>', '</i>');
+    if (hx(src.color) && hx(src.color) !== (hx(tgt.color) || '000000')) wrap(`<color #${hx(src.color)}>`, '</color>');
+    const gs = glowOf(src);
+    if (gs && JSON.stringify(gs) !== JSON.stringify(glowOf(tgt))) wrap(glowTag(gs), '</glow>');
+    const url = (x) => S.imageURLs.get(x) || '';
+    const paras = paragraphs(clip.rich).map((p) => {
+      const head = p.match(/^(?:<space\s+[\d.]+\s*>|<li(?:\s+hidden)?>)*/i)[0];
+      return { head, html: richToHTML(open + p.slice(head.length) + close, '<br class="soft">', url) };
+    });
+    if (paras.length === 1) {
+      D.execCommand('insertHTML', false, paras[0].html || '');
+    } else {
+      const div = (p) => {
+        const cls = { normal: ' li', hidden: ' li lih' }[bulletType(p.head)] || '';
+        const sp = paraSpaceOf(p.head);
+        return `<div class="pa${cls}"${sp != null ? ` data-space="${sp}" style="margin-top:${sp}pt"` : ''}>${p.html || '<br>'}</div>`;
+      };
+      D.execCommand('insertHTML', false, paras.map(div).join(''));
+    }
+    fixJaSpans(ed);
+  };
+
   // 箇条書きにする段落：カーソルのある段落（選んだ段落）。欄にカーソルが無ければ全部の段落
   const bulletTargets = () => {
     if (!ed) return [];
@@ -3612,9 +3718,12 @@ function textCtl(opts, onCommit) {
       timer = setTimeout(() => !composing && commit(), 600);
     };
     ed.onblur = commit;
-    ed.onpaste = (e) => {
-      e.preventDefault();
-      D.execCommand('insertText', false, e.clipboardData.getData('text/plain'));
+    ed.onpaste = pasteRich;
+    ed.oncopy = (e) => {
+      copyRich(e);
+    };
+    ed.oncut = (e) => {
+      if (copyRich(e)) D.execCommand('delete');
     };
   };
   const detach = () => {
@@ -3622,7 +3731,7 @@ function textCtl(opts, onCommit) {
     composing = false;
     if (D) D.removeEventListener('selectionchange', onSel);
     if (ed) {
-      ed.onkeydown = ed.oninput = ed.onblur = ed.onpaste = ed.onfocus = null;
+      ed.onkeydown = ed.oninput = ed.onblur = ed.onpaste = ed.oncopy = ed.oncut = ed.onfocus = null;
     }
     ed = null;
   };
@@ -3638,6 +3747,8 @@ function textCtl(opts, onCommit) {
       sizeIn.value = String(sizeAt(r));
       tellSel();
     },
+    paraSpaceAt,
+    applyParaSpace,
     // ボックス全体の色・大きさが変わったとき、ボタンの表示を合わせる
     refresh: () => {
       if (document.activeElement !== sizeIn) sizeIn.value = String(sizeAt(saved));
@@ -3869,7 +3980,7 @@ function closeSupport() {
 // パネルを、ボックスに重ならない近くに置く（下・上・右・左の順に、入る所）。ドラッグで動かしたあとは、その位置のまま
 function positionSupport() {
   const sp = S.support;
-  if (!sp || sp.moved) return;
+  if (!sp || sp.moved || sp.open) return; // 開いているあいだは動かさない（マウスの下から逃げないように）
   const box = findBox(sp.path);
   const frame = $('#frame');
   const win = frame.contentWindow;
@@ -3930,6 +4041,7 @@ function caretRect(fr) {
 }
 
 function buildSupport(box) {
+  const wasOpen = !!(S.support?.open && S.support.path === box.path); // 開いたまま作り直すときは、開いたままにする
   closeSupport();
   const path = box.path;
   const cur = () => findBox(path);
@@ -3953,6 +4065,9 @@ function buildSupport(box) {
     onBaseSize: (n) => set(['font', 'size'], n),
     onBoxColor: (c) => set(['font', 'color'], c || undefined),
     onBoxToggle: (k) => set(['font', k], font()[k] ? undefined : true),
+    boxFont: () => font(),
+    boxParaSpace: () => node().para_space ?? inh().para_space ?? 0,
+    onSelChange: () => showSpace(),
     // 書いている文字で、ボックスの高さを変える必要があるか
     needsFit: () => {
       const inl = S.inline;
@@ -4101,16 +4216,59 @@ function buildSupport(box) {
     i.className = 'rich-pad';
     return i;
   };
+  // 数値の欄の右の ▾：上・右・下・左を別々に変える（文字の余白には「背景ごと余白を設ける」も出す）
+  const padMenus = [];
+  const padDrop = (key, curVal, withInset) => {
+    const wrapD = h('span', 'rich-drop');
+    const btn = h('button', 'rich-btn rich-arrow', '▾');
+    btn.type = 'button';
+    btn.title = '上・右・下・左を別々に設定する';
+    const menu = h('div', 'rich-menu');
+    menu.hidden = true;
+    padMenus.push(menu);
+    btn.onmousedown = (e) => {
+      e.preventDefault();
+      if (!menu.hidden) return (menu.hidden = true);
+      padMenus.forEach((m) => (m.hidden = true));
+      imgMenu.hidden = true;
+      menu.innerHTML = '';
+      const b4 = parseBox(curVal(), u0);
+      const v = [b4.t, b4.r, b4.b, b4.l].map((x) => Math.round(x * 1000) / 1000);
+      menu.append(h('div', 'rich-menu-label', `${key === 'padding' ? '文字の余白' : '画像の余白'}（${u0}）`));
+      const line = h('div', 'rich-menu-row');
+      [['↑', '上'], ['→', '右'], ['↓', '下'], ['←', '左']].forEach(([icon, title], k) => {
+        const ic = h('span', 'pad-ic', icon);
+        ic.title = title;
+        const inp = numEl(v[k], '0', (x) => {
+          v[k] = x === '' ? 0 : Math.max(0, +x);
+          const b = cur();
+          if (b) set(key, padValue(b, v.slice()));
+        }, 0.1);
+        inp.min = '0';
+        inp.className = 'rich-pad';
+        line.append(ic, inp);
+      });
+      menu.append(line);
+      if (withInset) menu.append(checkEl('背景ごと余白を設ける', !!node().background_inset, (x) => set('background_inset', x || undefined)));
+      menu.hidden = false;
+      fitMenu(menu);
+    };
+    wrapD.append(btn, menu);
+    return wrapD;
+  };
   const grpPad = h('span', 'rich-group rich-pads');
   grpPad.append(
-    h('span', 'rich-unit', '余白 文字'), padIn('padding', node().padding ?? defaultPadding('text')),
-    h('span', 'rich-unit', '画像'), padIn('image_padding', imagePadding(node())),
+    h('span', 'rich-unit', '余白 文字'), padIn('padding', node().padding ?? defaultPadding('text')), padDrop('padding', () => node().padding ?? defaultPadding('text'), true),
+    h('span', 'rich-unit', '画像'), padIn('image_padding', imagePadding(node())), padDrop('image_padding', () => imagePadding(node()), false),
     h('span', 'rich-unit', u0),
   );
   ctl.bar.append(h('span', 'rich-sep'), glowBtn, imgWrap, grpPad);
   document.addEventListener('mousedown', function outside(e) {
     if (!el.isConnected) return document.removeEventListener('mousedown', outside);
-    if (!e.target.closest?.('.rich-drop')) imgMenu.hidden = true;
+    if (!e.target.closest?.('.rich-drop')) {
+      imgMenu.hidden = true;
+      padMenus.forEach((m) => (m.hidden = true));
+    }
   });
 
   // そのほかの文字の設定（左の欄から移した）。開くかどうかは覚えておく
@@ -4135,12 +4293,28 @@ function buildSupport(box) {
   const n0 = node();
   const f0 = font();
   const i0 = inh();
+  // 段落の間隔の欄に、選んだ段落の間隔を出す
+  let spaceIn = null;
+  const showSpace = () => {
+    if (!spaceIn || document.activeElement === spaceIn) return;
+    const v = ctl.paraSpaceAt();
+    spaceIn.value = String(v ?? node().para_space ?? inh().para_space ?? 0);
+  };
   // フォントは、畳まずに書式のボタンのすぐ下に出す（選んだボックスの文字のフォント）
   const fonts = h('div', 'support-fonts');
   fonts.append(
     row('フォント（英語）', selectEl(FONT_OPTS, f0.family ?? DEFAULT_FONT, (v) => set(['font', 'family'], v))),
     row('フォント（日本語）', selectEl(JA_FONT_OPTS, f0.family_ja ?? DEFAULT_FONT_JA, (v) => set(['font', 'family_ja'], v))),
   );
+  // 段落の間隔：書く欄で選んだ段落だけを変える（複数の段落を選べば、その中の段落どうしの間。1 つの段落の中なら、その段落の前）。
+  // 書く欄にカーソルを置く前は、ボックス全体の段落の間隔を変える
+  spaceIn = numEl(n0.para_space ?? i0.para_space ?? 0, '', (v) => {
+    const n = +v > 0 ? +v : 0;
+    if (ctl.applyParaSpace(n)) return;
+    set('para_space', n > 0 ? n : undefined);
+  });
+  spaceIn.min = '0';
+  spaceIn.title = 'ドラッグで選んだ段落どうしの間隔（1 つの段落の中なら、その段落の前の間隔）';
   more.append(
     fullRow(pairLine(
       ['揃え方（横）', selectEl(H_OPTS, n0.align ?? i0.align ?? 'left', (v) => set('align', v))],
@@ -4148,7 +4322,7 @@ function buildSupport(box) {
     )),
     fullRow(pairLine(
       ['行間', numEl(n0.line_height ?? i0.line_height ?? 1.2, '', (v) => +v > 0 && set('line_height', +v), 0.05), '倍'],
-      ['段落の間隔', numEl(n0.para_space ?? i0.para_space ?? 0, '', (v) => set('para_space', +v > 0 ? +v : undefined)), 'pt'],
+      ['段落の間隔', spaceIn, 'pt'],
     )),
     ...textBgRows(b0, n0, (b, k, v) => set(k, v)),
     // 光彩の色の既定は白（光彩を付けていなくても白を出す。付けるかどうかは書式の「光彩」のボタンで切り替える）
@@ -4168,10 +4342,58 @@ function buildSupport(box) {
       return unfitTextBelow(b);
     })),
   );
-  el.append(head, ctl.bar, fonts, more);
+  // ふだんは鉛筆のアイコンだけを小さく出し、マウスを乗せると開く。離すと畳む
+  // （パネルの中の欄に書いている途中・色を選ぶ画面を開いている途中は畳まない。欄から出たときに畳む）
+  const pen = h('button', 'support-pen');
+  pen.type = 'button';
+  pen.title = '書式（マウスを乗せると開く）';
+  pen.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h4L19 9l-4-4L4 16v4z"/><path d="M14 6l4 4"/></svg>';
+  pen.onmousedown = (e) => e.preventDefault();
+  el.classList.add('collapsed');
+  el.append(pen, head, ctl.bar, fonts, more);
   document.body.append(el);
   requestAnimationFrame(fitSupportLabels);
   S.support = { path, el, ctl, moved: false };
+  let hover = false;
+  let shut = null;
+  const busy = () => {
+    const a = document.activeElement;
+    return !!(a && el.contains(a) && /^(INPUT|SELECT|TEXTAREA)$/.test(a.nodeName));
+  };
+  const expand = () => {
+    clearTimeout(shut);
+    if (!el.classList.contains('collapsed')) return;
+    el.classList.remove('collapsed');
+    S.support && (S.support.open = true);
+    fitSupportLabels();
+    // 開いたパネルが画面からはみ出すときは、内側に寄せる
+    const r = el.getBoundingClientRect();
+    if (r.right > innerWidth - 4) el.style.left = `${Math.max(4, Math.round(innerWidth - 4 - r.width))}px`;
+    if (r.bottom > innerHeight - 4) el.style.top = `${Math.max(4, Math.round(innerHeight - 4 - r.height))}px`;
+  };
+  const collapse = () => {
+    clearTimeout(shut);
+    shut = setTimeout(() => {
+      if (hover || busy() || !el.isConnected) return;
+      el.querySelectorAll('.rich-menu').forEach((m) => (m.hidden = true));
+      el.classList.add('collapsed');
+      if (S.support) S.support.open = false;
+      positionSupport();
+    }, 300);
+  };
+  el.onmouseenter = () => {
+    hover = true;
+    expand();
+  };
+  el.onmouseleave = () => {
+    hover = false;
+    collapse();
+  };
+  el.addEventListener('focusout', () => setTimeout(() => !hover && collapse(), 0));
+  if (wasOpen) {
+    hover = el.matches(':hover');
+    expand();
+  }
 
   // ドラッグで動かす（つまみを持って動かす）
   head.onpointerdown = (e) => {
@@ -4298,6 +4520,19 @@ function serializeRich(root) {
           out += `${ct ? `<color #${ct}>` : ''}<size ${+c.dataset.size}>${inline(c)}</size>${ct ? '</color>' : ''}`;
           continue;
         }
+        // 一部の文字の光彩：<span class="gl" data-glow>（色も付いていれば、その色も書く）
+        if (c.nodeName === 'SPAN' && c.classList.contains('gl')) {
+          let g = null;
+          try {
+            g = JSON.parse(c.dataset.glow || 'null');
+          } catch {
+            g = null;
+          }
+          const cc = c.style?.color ? toHex6(c.style.color) : null;
+          const ct = cc && cc !== NO_COLOR.slice(1).toUpperCase() ? cc : null;
+          out += `${ct ? `<color #${ct}>` : ''}${g ? glowTag(g) : ''}${inline(c)}${g ? '</glow>' : ''}${ct ? '</color>' : ''}`;
+          continue;
+        }
         // 下線：<u>（一重線）、<u class="ud">（二重線）、<u class="ui" data-img data-w>（画像の線）
         if (c.nodeName === 'U') {
           const open = c.classList.contains('ui') ? `<u img="${c.dataset.img}" w="${c.dataset.w || 2}">` : c.classList.contains('ud') ? '<u double>' : '<u>';
@@ -4323,7 +4558,8 @@ function serializeRich(root) {
     if (c.nodeType === 1 && (c.nodeName === 'DIV' || c.nodeName === 'P')) {
       if (pending !== null) paras.push(pending);
       pending = null;
-      paras.push((c.classList.contains('li') ? (c.classList.contains('lih') ? '<li hidden>' : '<li>') : '') + inline(c));
+      const sp = c.dataset?.space;
+      paras.push((sp != null && sp !== '' ? `<space ${+sp}>` : '') + (c.classList.contains('li') ? (c.classList.contains('lih') ? '<li hidden>' : '<li>') : '') + inline(c));
     } else {
       pending = (pending ?? '') + inline({ childNodes: [c] });
     }
@@ -4334,6 +4570,7 @@ function serializeRich(root) {
     .replace(/<u[^>]*><\/u>/g, '')
     .replace(/<size [\d.]+><\/size>/g, '')
     .replace(/<color #[0-9A-F]{6}><\/color>/g, '')
+    .replace(/<glow[^>]*><\/glow>/g, '')
     // 隣り合う同じ色はまとめる
     .replace(/<color (#[0-9A-F]{6})>((?:(?!<\/?color)[\s\S])*)<\/color><color \1>/g, '<color $1>$2');
 }

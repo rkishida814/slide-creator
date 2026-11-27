@@ -1,5 +1,5 @@
 // 配置結果 → HTML。PDF/PNG 出力（Chrome）とブラウザ版の表示で共用する。
-import { richToHTML, paragraphs, bulletType } from './richtext.js';
+import { richToHTML, paragraphs, bulletType, paraSpaceOf, glowShadowCSS } from './richtext.js';
 // 長さはキャンバスの単位をそのまま CSS の単位として使う（cm, mm, in, pt, px）。
 
 // フォントは、英数字（英語）用と日本語用を別々に選ぶ（font.family と font.family_ja）。
@@ -48,9 +48,7 @@ function rgba(c0, opacity, fallback) {
 
 // 光彩を CSS の text-shadow で近似する（ぼかしの小さい影を重ねて濃くし、外側を半径 size までぼかす）
 function glowCSS(g) {
-  const col = rgba(g.color, g.opacity, '#ffffff');
-  const r = g.size;
-  return [0.12, 0.12, 0.2, 0.2, 0.3, 0.3, 0.45, 0.65, 1].map((b) => `0 0 ${(r * b).toFixed(2)}pt ${col}`).join(',');
+  return glowShadowCSS({ ...g, color: color(g.color, '#ffffff') });
 }
 
 const esc = (s) => String(s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[ch]);
@@ -218,7 +216,12 @@ function renderElement(e, L, opts) {
       ...(glowOf(f) ? [`text-shadow:${glowCSS(glowOf(f))}`] : []),
     ].join(';');
     const paras = paragraphs(e.text)
-      .map((p, i) => `<div class="pa${{ normal: ' li', hidden: ' li lih' }[bulletType(p)] || ''}"${i && e.para_space ? ` style="margin-top:${e.para_space}pt"` : ''}>${jaSpans(richToHTML(p, '<br class="soft">', opts.srcURL || ((x) => x))) || '<br>'}</div>`)
+      .map((p, i) => {
+        // 段落の前の間隔：段落に書いた間隔（<space N>）か、ボックスの段落の間隔。最初の段落には付けない
+        const own = paraSpaceOf(p);
+        const sp = i ? own ?? e.para_space : 0;
+        return `<div class="pa${{ normal: ' li', hidden: ' li lih' }[bulletType(p)] || ''}"${own != null ? ` data-space="${own}"` : ''}${sp ? ` style="margin-top:${sp}pt"` : ''}>${jaSpans(richToHTML(p, '<br class="soft">', opts.srcURL || ((x) => x))) || '<br>'}</div>`;
+      })
       .join('');
     const tb = e.text_bg;
     const tbAttr = tb
