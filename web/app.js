@@ -1,7 +1,7 @@
 // slide-creator ブラウザ版
 import { resolveDoc } from '../src/core/resolve.js';
-import { layoutDoc } from '../src/core/layout.js';
-import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, measureTextBgs, hasTextBg, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA } from '../src/core/html.js';
+import { layoutDoc, ARROW_DEFAULT } from '../src/core/layout.js';
+import { renderHTML, loadUsedFonts, measureUnderlines, hasImageUnderline, measureTextBgs, hasTextBg, FONTS, JA_FONTS, DEFAULT_FONT, DEFAULT_FONT_JA, JA_CHARS } from '../src/core/html.js';
 import { richToHTML, paragraphs, bulletType, underlineHTML } from '../src/core/richtext.js';
 import { buildPPTX, finishPPTX } from '../src/core/pptx.js';
 import { PER_INCH, toUnit, defaultPadding, imagePadding, parseBox, isBgTree } from '../src/core/units.js';
@@ -158,6 +158,7 @@ async function rebuild() {
     const srcs = new Set();
     (resolved.slides || []).forEach((s) => {
       collectImages(s.root, srcs);
+      (s.free || []).forEach((f) => collectImages(f, srcs));
       if (s.background?.image) srcs.add(String(s.background.image));
     });
     if (resolved.background?.image) srcs.add(String(resolved.background.image));
@@ -329,6 +330,7 @@ function setupFrame() {
   if (!sec) return;
   sec.style.transform = 'none';
   doc.body.classList.toggle('bgedit', S.layer === 'bg');
+  if (S.tool) doc.body.style.cursor = 'crosshair';
   S.ppu = sec.getBoundingClientRect().width / S.layout.width; // キャンバスの単位あたりの px
   for (const cls of ['hov', 'sel', 'drop']) {
     const d = doc.createElement('div');
@@ -360,11 +362,22 @@ function setupFrame() {
       downInEd = true;
       return;
     }
+    // テキストボックス・矢印を置く道具を選んでいるときは、ドラッグした範囲（向き）に置く
+    if (S.tool && S.layer === 'main') {
+      e.preventDefault();
+      drag = { draw: S.tool, p0: canvasPoint(e), x: e.clientX, y: e.clientY, moving: false };
+      return;
+    }
     // 背景では、いま開いている背景の枠だけをドラッグで選ぶ（別のボックスはクリックで開く）
     const b = S.layer === 'bg' ? leafAt(e) : pickAt(e);
     if (!b) return;
     e.preventDefault();
     drag = { box: b, x: e.clientX, y: e.clientY, moving: false, swap: e.metaKey || e.ctrlKey };
+    // 自由な位置の要素は、ドラッグで動かす（選んだ矢印の端なら、その端だけ）
+    if (b.free && !drag.swap) {
+      drag.p0 = canvasPoint(e);
+      drag.free = { end: b.kind === 'arrow' && S.selected === b.path ? arrowEndAt(b, drag.p0) : null };
+    }
     // 複数選んだ行（横いっぱい）の中から ⌘ドラッグを始めたら、行ごと入れ替える
     if (S.layer !== 'block' && drag.swap && (S.sel || []).length > 1 && S.sel.includes(b.path)) drag.row = rowSwapPlan();
   });
@@ -376,6 +389,17 @@ function setupFrame() {
       if (drag.swap) doc.body.style.cursor = 'grabbing';
     }
     if (!drag.moving) return;
+    if (drag.draw || drag.free) {
+      const p = canvasPoint(e);
+      if (drag.draw === 'text') return showGhost({ rect: normRect(drag.p0, p) });
+      if (drag.draw === 'arrow') return showGhost({ x1: drag.p0.x, y1: drag.p0.y, x2: p.x, y2: p.y });
+      const dx = p.x - drag.p0.x;
+      const dy = p.y - drag.p0.y;
+      if (drag.box.kind !== 'arrow') return showGhost({ rect: { ...drag.box.rect, x: drag.box.rect.x + dx, y: drag.box.rect.y + dy } });
+      const a = arrowEl(drag.box);
+      const end = drag.free.end;
+      return showGhost({ x1: a.x1 + (end !== 1 ? dx : 0), y1: a.y1 + (end !== 1 ? dy : 0), x2: a.x2 + (end !== 0 ? dx : 0), y2: a.y2 + (end !== 0 ? dy : 0), w: a.wu });
+    }
     const t = pickAt(e);
     if (drag.swap && drag.row) {
       showDrop(rowDropTarget(drag.row, t));
@@ -392,8 +416,26 @@ function setupFrame() {
     drag = null;
     doc.body.style.cursor = '';
     showDrop(null);
+    showGhost(null);
+    if (d.draw) {
+      // クリックだけ（ドラッグしなかった）なら、決まった大きさ・長さで置く
+      dragged = true;
+      const p = canvasPoint(e);
+      const W = S.layout.width;
+      if (d.draw === 'text') {
+        let r = normRect(d.p0, p);
+        if (!d.moving || r.w < W * 0.02 || r.h < W * 0.01) r = { x: d.p0.x, y: d.p0.y, w: W * 0.25, h: W * 0.06 };
+        return addFree({ x: round2(r.x), y: round2(r.y), w: round2(r.w), h: round2(r.h), text: '' });
+      }
+      const q = d.moving && Math.hypot(p.x - d.p0.x, p.y - d.p0.y) > W * 0.01 ? p : { x: d.p0.x + W * 0.12, y: d.p0.y };
+      return addFree({ arrow: [d.p0.x, d.p0.y, q.x, q.y].map(round2) });
+    }
     if (!d.moving) return;
     dragged = true;
+    if (d.free) {
+      const p = canvasPoint(e);
+      return Promise.resolve(moveFree(d.box, p.x - d.p0.x, p.y - d.p0.y, d.free.end)).then(() => select(d.box.path));
+    }
     if (d.swap && d.row) {
       const t = leafAt(e);
       if (t) swapRows(d.row, t);
@@ -495,6 +537,12 @@ function fitTextBelow(path, doc, dry = false) {
   const textH = el.firstElementChild.getBoundingClientRect().height / (S.ppu * S.view.s);
   const pad = parseBox(node.padding ?? defaultPadding('text'), u);
   const need = Math.ceil((textH + pad.t + pad.b) * 100) / 100;
+  // 自由な位置のテキストボックスは、文字が入りきらないときだけ高さを伸ばす（下に空きのボックスは作らない）
+  if (box.free) {
+    if (dry || need <= box.rect.h + 1e-6) return;
+    edit(box, 'h', need);
+    return true;
+  }
   return fitBoxHeight(box, need, toUnit('0.5cm', u), dry);
 }
 
@@ -673,7 +721,7 @@ function showDrop(box) {
 
 // 入れ替えられるのは、どちらも YAML にそのまま書かれたボックスで、外側と内側の関係にないもの
 function canSwap(a, b) {
-  if (!a || !b || a.path === b.path || !a.src || !b.src) return false;
+  if (!a || !b || a.path === b.path || !a.src || !b.src || a.free || b.free) return false;
   if (a.depth === 0 || b.depth === 0) return false;
   if (a.src.file !== b.src.file || a.src.mode !== 'direct' || b.src.mode !== 'direct') return false;
   const pre = (x, y) => x.length <= y.length && x.every((v, i) => v === y[i]);
@@ -714,7 +762,7 @@ function overlaps(q, r) {
 // （ほかの組のボックスが、固定長の合計が領域を超えるなどで少しはみ出して重なっていても、巻き込まない）
 function rectSelect(a, b) {
   const lca = a.path === b.path ? a : commonAncestor([a, b]);
-  const leaves = curSlide().boxes.filter((l) => isLeaf(l) && (!lca || within(l, lca)));
+  const leaves = curSlide().boxes.filter((l) => isLeaf(l) && !l.free && (!lca || within(l, lca)));
   const hits = overlaps;
   let r = unionRect([a.rect, b.rect]);
   for (let k = 0; k < 50; k++) {
@@ -786,7 +834,7 @@ function applyView() {
   selEl.style.outline = `${2.5 / s}px solid #2563eb`;
   selEl.style.background = 'rgba(37, 99, 235, .08)';
   const one = S.selected ? findBox(S.selected) : null;
-  $('#btn-split').disabled = !(one && one.src && isLeaf(one));
+  $('#btn-split').disabled = !(one && one.src && isLeaf(one) && !one.free);
   $('#btn-zoom-fit').disabled = !(S.sel || []).length;
   $('#layer').value = S.layer;
   $('#btn-dup').disabled = !dupPlan();
@@ -810,12 +858,165 @@ function realLeafAt(e) {
 function leafIn(slide, e) {
   if (!slide || !S.view) return null;
   const { x, y } = canvasPoint(e);
+  // 自由な位置の要素は、分割の枠の上に重なっているので先に探す（後に置いたものほど上）
+  const fr = S.layer === 'main' ? freeAt(slide, x, y) : null;
+  if (fr) return fr;
   let best = null;
   for (const b of slide.boxes) {
     const q = b.rect;
     if (x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h && (!best || b.depth >= best.depth)) best = b;
   }
   return best && isLeaf(best) ? best : null;
+}
+
+// ---- 自由な位置の要素（スライドの free:。テキストボックスと矢印）
+const arrowEl = (b, slide = realSlide()) => slide?.elements.find((e) => e.type === 'arrow' && e.path === b.path) || null;
+const pxToUnit = (px) => px / ((S.view?.s || 1) * (S.ppu || 1));
+function segDist(x, y, a) {
+  const dx = a.x2 - a.x1;
+  const dy = a.y2 - a.y1;
+  const L2 = dx * dx + dy * dy;
+  const t = L2 ? Math.max(0, Math.min(1, ((x - a.x1) * dx + (y - a.y1) * dy) / L2)) : 0;
+  return Math.hypot(x - (a.x1 + t * dx), y - (a.y1 + t * dy));
+}
+function freeAt(slide, x, y) {
+  const tol = pxToUnit(6);
+  for (let i = slide.boxes.length - 1; i >= 0; i--) {
+    const b = slide.boxes[i];
+    if (!b.free) continue;
+    if (b.kind === 'arrow') {
+      const a = arrowEl(b, slide);
+      if (a && segDist(x, y, a) <= Math.max(a.wu, tol)) return b;
+    } else {
+      const q = b.rect;
+      if (x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h) return b;
+    }
+  }
+  return null;
+}
+// 選んだ矢印の端の近く（始点なら 0、終点なら 1）
+function arrowEndAt(b, p) {
+  const a = arrowEl(b);
+  if (!a) return null;
+  const tol = Math.max(a.wu * 2, pxToUnit(9));
+  if (Math.hypot(p.x - a.x2, p.y - a.y2) <= tol) return 1;
+  if (Math.hypot(p.x - a.x1, p.y - a.y1) <= tol) return 0;
+  return null;
+}
+function setTool(t) {
+  S.tool = S.tool === t ? null : t;
+  $('#btn-add-text').classList.toggle('on', S.tool === 'text');
+  $('#btn-add-arrow').classList.toggle('on', S.tool === 'arrow');
+  const d = $('#frame').contentDocument;
+  if (d?.body) d.body.style.cursor = S.tool ? 'crosshair' : '';
+  if (S.tool) status(S.tool === 'text' ? 'プレビューでドラッグした範囲にテキストボックスを置きます（Esc でやめる）' : 'プレビューで始点から終点までドラッグすると矢印を引きます（Esc でやめる）');
+  else status('');
+}
+// ドラッグ中の形を、プレビューに仮に描く（四角はテキストボックス、線は矢印）
+function showGhost(g) {
+  const doc = $('#frame').contentDocument;
+  const sec = doc?.querySelector('section.slide');
+  if (!sec) return;
+  let el = sec.querySelector('svg.ghost');
+  if (!g) return el?.remove();
+  if (!el) {
+    el = doc.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    el.setAttribute('class', 'ghost');
+    sec.append(el);
+  }
+  const W = S.layout.width;
+  const H = S.layout.height;
+  el.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  Object.assign(el.style, { position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', overflow: 'visible', pointerEvents: 'none', zIndex: 12 });
+  const sw = pxToUnit(2);
+  el.innerHTML = g.rect
+    ? `<rect x="${g.rect.x}" y="${g.rect.y}" width="${g.rect.w}" height="${g.rect.h}" fill="rgba(234,88,12,.1)" stroke="#ea580c" stroke-width="${sw}" stroke-dasharray="${sw * 3} ${sw * 2}"/>`
+    : `<line x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}" stroke="#ea580c" stroke-width="${Math.max(sw, g.w || 0)}" stroke-dasharray="${sw * 3} ${sw * 2}"/><circle cx="${g.x2}" cy="${g.y2}" r="${sw * 2.5}" fill="#ea580c"/>`;
+}
+const normRect = (p, q) => ({ x: Math.min(p.x, q.x), y: Math.min(p.y, q.y), w: Math.abs(q.x - p.x), h: Math.abs(q.y - p.y) });
+// スライドの free: に 1 つ足し、それを選ぶ（テキストボックスなら、そのまま書けるようにする）
+async function addFree(item) {
+  const i = S.layout.slides.findIndex((s) => s.id === S.slideId);
+  const doc = S.files['layout.yaml']?.doc;
+  if (i < 0 || !doc) return;
+  const node = doc.createNode(item);
+  node.flow = true;
+  const list = doc.getIn(['slides', i, 'free'], true);
+  let k = 0;
+  if (YAML.isSeq(list)) {
+    k = list.items.length;
+    list.items.push(node);
+  } else {
+    const seq = doc.createNode([]);
+    seq.items.push(node);
+    doc.setIn(['slides', i, 'free'], seq);
+  }
+  setTool(null);
+  await fileChanged('layout.yaml');
+  const p = `${S.slideId}/free${k}`;
+  select(p);
+  if (item.arrow == null) startInline({ focus: true });
+}
+// ドラッグで動かした自由な要素を書き込む。end：矢印の端だけを動かす（0 は始点、1 は終点）
+function moveFree(box, dx, dy, end) {
+  if (box.kind === 'arrow') {
+    const a = arrowEl(box);
+    const v = [a.x1, a.y1, a.x2, a.y2];
+    if (end !== 1) [v[0], v[1]] = [v[0] + dx, v[1] + dy];
+    if (end !== 0) [v[2], v[3]] = [v[2] + dx, v[3] + dy];
+    return edit(box, 'arrow', v.map(round2));
+  }
+  return editMany(box, [['x', round2(box.rect.x + dx)], ['y', round2(box.rect.y + dy)]]);
+}
+function removeFree(box) {
+  const { file, path } = box.src;
+  if (box.kind !== 'arrow' && String(box.node?.text ?? '').trim() && !confirm('このテキストボックスと中身を消しますか？')) return;
+  S.files[file].doc.deleteIn(path);
+  setSel([]);
+  return fileChanged(file).then(() => status(box.kind === 'arrow' ? '矢印を消しました' : 'テキストボックスを消しました'));
+}
+// 矢印の設定欄：位置・太さ・色・矢じり・光彩
+function arrowFields(box) {
+  const node = box.node || {};
+  const a = arrowEl(box);
+  const u = S.layout.unit;
+  const fs = fieldset('矢印');
+  const setEnd = (j, v) => {
+    const c = [a.x1, a.y1, a.x2, a.y2].map(round2);
+    c[j] = +v;
+    edit(box, 'arrow', c);
+  };
+  const g = node.glow ? (node.glow === true ? {} : node.glow) : null;
+  const setGlow = (k, v) => edit(box, 'glow', { color: g?.color ?? '#ffff00', size: g?.size ?? 6, opacity: g?.opacity ?? 1, [k]: v });
+  fs.append(
+    row('始点', h2(numEl(round2(a.x1), 'x', (v) => setEnd(0, v)), numEl(round2(a.y1), 'y', (v) => setEnd(1, v)), u)),
+    row('終点', h2(numEl(round2(a.x2), 'x', (v) => setEnd(2, v)), numEl(round2(a.y2), 'y', (v) => setEnd(3, v)), u)),
+    row('太さ', h2(numEl(node.width ?? ARROW_DEFAULT.width, '', (v) => +v > 0 && edit(box, 'width', +v)), 'pt')),
+    row('色', colorEl(node.color ?? ARROW_DEFAULT.color, (v) => edit(box, 'color', v || undefined))),
+    row('矢じり', selectEl([['end', '終点'], ['start', '始点'], ['both', '両端'], ['none', 'なし']], node.head ?? ARROW_DEFAULT.head, (v) => edit(box, 'head', v === ARROW_DEFAULT.head ? undefined : v))),
+    row('光彩', checkEl('付ける', !!g, (on) => edit(box, 'glow', on ? { color: '#ffff00', size: 6, opacity: 1 } : undefined))),
+  );
+  if (g) {
+    fs.append(
+      row('光彩の色', colorEl(g.color ?? '#ffff00', (v) => setGlow('color', v || '#ffff00'))),
+      row('光彩の大きさ', h2(numEl(g.size ?? 6, '', (v) => +v > 0 && setGlow('size', +v)), 'pt')),
+      row('光彩の透明度', h2(numEl(Math.round((1 - (g.opacity ?? 1)) * 100), '', (v) => setGlow('opacity', Math.max(0, Math.min(1, 1 - +v / 100)))), '%')),
+    );
+  }
+  fs.append(h('p', 'note', 'プレビューで矢印をドラッグすると動かせます。選んだ矢印の端をドラッグすると、その端だけを動かします。'));
+  return fs;
+}
+// 自由な位置のテキストボックスの位置と大きさ
+function freeRectFields(box) {
+  const u = S.layout.unit;
+  const fs = fieldset('位置と大きさ');
+  const r = box.rect;
+  fs.append(
+    row('位置', h2(numEl(round2(r.x), 'x', (v) => edit(box, 'x', +v)), numEl(round2(r.y), 'y', (v) => edit(box, 'y', +v)), u)),
+    row('大きさ', h2(numEl(round2(r.w), '幅', (v) => +v > 0 && edit(box, 'w', +v)), '×', numEl(round2(r.h), '高さ', (v) => +v > 0 && edit(box, 'h', +v)), u)),
+    h('p', 'note', 'ボックスの縁（文字の外側の余白）をドラッグすると動かせます。'),
+  );
+  return fs;
 }
 
 function measureOverflow(doc) {
@@ -981,6 +1182,7 @@ function splitBox(box, dir, n, cols = 1) {
 // 枠そのものを消す。分割・格子の中の枠だけが対象。
 // 分割の中の枠が 1 つだけ残ったら、分割をやめて、残った枠を外側の枠の位置に置く
 function canRemove(box) {
+  if (box?.free) return !!box.src;
   const parent = box.parent ? findBox(box.parent) : null;
   return !!(parent && parent.src && box.src && (parent.kind === 'split' || parent.kind === 'grid'));
 }
@@ -1573,6 +1775,7 @@ function removeInSplit(lca, selSet) {
 
 function removeBox(box) {
   if (!canRemove(box)) return;
+  if (box.free) return removeFree(box);
   if (hasContent(box) && !confirm('このボックスと中身を消しますか？')) return;
   const parent = findBox(box.parent);
   if (parent.kind === 'split') return removeInSplit(parent, new Set(curSlide().boxes.filter((b) => isLeaf(b) && within(b, box)).map((b) => b.path)));
@@ -1816,11 +2019,15 @@ function renderPropsInner() {
   const mode = box.src.mode;
   if (mode === 'shared') el.append(h('p', 'warn', 'このボックスは、複数のスライドで共通に使うボックスの組み合わせ（テンプレート）の一部です。変えると、このテンプレートを使う全てのスライドが変わります。'));
 
+  if (box.kind === 'arrow') {
+    el.append(arrowFields(box));
+    return;
+  }
   // 種類
-  const fsSize = sizeFields(box);
+  const fsSize = box.free ? freeRectFields(box) : sizeFields(box);
   if (fsSize) el.append(fsSize);
   // 文字・画像は、プレビューのボックスに直接書き、サポートパネルで設定する（この欄には出さない）
-  if (isLeaf(box) && S.importFor !== box.path) {
+  if (isLeaf(box) && !box.free && S.importFor !== box.path) {
     el.append(row('', btn('レイアウトを取り込む…', () => {
       S.importFor = box.path;
       renderProps();
@@ -1838,7 +2045,7 @@ function renderPropsInner() {
     ...(isBgTree(node.background)
       ? [row('背景', h('span', 'note', '分けて設定している（「背景を編集」で変える）'))]
       : bgRows(node.background, (v) => edit(box, 'background', v), { rect: box.rect })),
-    row('', bgEditBtn(box)),
+    ...(box.free ? [] : [row('', bgEditBtn(box))]),
     row('枠線', h2(
       numEl(node.border?.width ?? 0, '', (v) => edit(box, 'border', +v > 0 ? { width: +v, color: node.border?.color || '#333333' } : undefined)),
       'pt',
@@ -2193,6 +2400,7 @@ function stripIds(n) {
 function copySelection() {
   const u = selectionUnit();
   if (!u) return;
+  if (u.box?.free) return status('自由な位置のテキストボックス・矢印は、コピーできません', true);
   const r = selectionRect();
   let node;
   if (u.kind === 'node') {
@@ -3385,6 +3593,7 @@ function textCtl(opts, onCommit) {
       });
       ed.addEventListener('compositionend', () => {
         composing = false;
+        fixJaSpans(ed);
         clearTimeout(timer);
         timer = setTimeout(commit, 0);
       });
@@ -3394,6 +3603,7 @@ function textCtl(opts, onCommit) {
     ed.oninput = (e) => {
       clearTimeout(timer);
       if (composing || e.isComposing) return opts.onComposing?.();
+      fixJaSpans(ed);
       if (!S.fitPending && opts.needsFit?.()) {
         S.fitPending = true; // 描き直し終わるまでに打った文字は、待たせておく（描き直すと消えるため）
         setTimeout(() => S.fitPending && releaseFit(), 2000); // 描き直しが終わらなかったときも、打った文字を失わない
@@ -3462,6 +3672,48 @@ function addUnderImg(path) {
     localStorage.setItem('slideCreator.underImgs', JSON.stringify([path, ...cur.filter((p) => p !== path)].slice(0, 20)));
   } catch {
     // 覚えられなくても、この場では使える
+  }
+}
+
+// 書く欄の日本語の字だけを <span class="j">（日本語用のフォント）に入れ直す。
+// 日本語の字のすぐ後ろで半角の字を打つと、ブラウザはその字を span.j の中に入れるので、日本語用のフォントで表示されてしまう。
+// 打つたびに確かめ、ずれていれば組み直してカーソルを同じ位置に戻す（ずれていなければ何もしない）
+function fixJaSpans(ed) {
+  const D = ed.ownerDocument;
+  const ja = new RegExp(JA_CHARS.source);
+  const allJa = new RegExp(`^(?:${JA_CHARS.source})$`);
+  const w = D.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+  let bad = false;
+  for (let t = w.nextNode(); t && !bad; t = w.nextNode()) {
+    const v = t.nodeValue.replace(/\u200B/g, '');
+    if (!v) continue;
+    const inJ = t.parentElement?.closest('span.j') && ed.contains(t.parentElement.closest('span.j'));
+    bad = inJ ? !allJa.test(v) : ja.test(v);
+  }
+  if (!bad) return;
+  const pos = offsetsIn(ed);
+  for (const sp of [...ed.querySelectorAll('span.j')]) sp.replaceWith(...sp.childNodes);
+  ed.normalize();
+  const texts = [];
+  const w2 = D.createTreeWalker(ed, NodeFilter.SHOW_TEXT);
+  for (let t = w2.nextNode(); t; t = w2.nextNode()) if (ja.test(t.nodeValue)) texts.push(t);
+  for (const t of texts) {
+    const frag = D.createDocumentFragment();
+    for (const part of t.nodeValue.split(new RegExp(`(${JA_CHARS.source})`))) {
+      if (!part) continue;
+      if (allJa.test(part)) {
+        const sp = D.createElement('span');
+        sp.className = 'j';
+        sp.textContent = part;
+        frag.append(sp);
+      } else frag.append(D.createTextNode(part));
+    }
+    t.replaceWith(frag);
+  }
+  if (pos) {
+    const sel = D.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(rangeAt(ed, pos));
   }
 }
 
@@ -3603,7 +3855,7 @@ function finishInline() {
 // 選択に合わせて、サポートパネルを出す・消す・置き直す（applyView のたびに呼ぶ）
 function syncSupport() {
   const one = S.layer === 'main' && S.selected ? findBox(S.selected) : null;
-  if (!one || !one.src || !isLeaf(one)) return closeSupport();
+  if (!one || !one.src || !isLeaf(one) || one.kind === 'arrow') return closeSupport();
   if (!S.support || S.support.path !== one.path || S.support.stale) buildSupport(one);
   positionSupport();
 }
@@ -4461,7 +4713,7 @@ function bgInner(b) {
   return { x: b.rect.x + p.l, y: b.rect.y + p.t, w: b.rect.w - p.l - p.r, h: b.rect.h - p.t - p.b };
 }
 
-const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト' };
+const KIND_LABEL = { empty: '空き', split: '分割', grid: '格子', image: '画像', text: 'テキスト', arrow: '矢印' };
 const KIND_OPTS = [['text', 'テキスト'], ['image', '画像'], ['layout', 'レイアウトを取り込む…']];
 const FIT_OPTS = [['contain', '切らずに全体を収める'], ['cover', 'ボックスいっぱいに広げ、はみ出た部分を切る'], ['stretch', '縦横比を変えてボックスに合わせる']];
 const H_OPTS = [['left', '左'], ['center', '中央'], ['right', '右']];
@@ -4858,6 +5110,7 @@ function onKey(e) {
     return;
   }
   if (e.key === 'Escape') {
+    if (S.tool) return setTool(null);
     if (S.layer === 'bg' && !(S.sel || []).length) return exitBgEdit();
     select(null);
   }
@@ -4866,6 +5119,8 @@ function onKey(e) {
 // 選んだボックス（複数も）の中身を消して、空のテキストボックスにする。ボックスの大きさ・余白・背景・枠線・文字の設定は残す
 const CLEAR_KEYS = ['image', 'image_padding', 'crop', 'fit', 'split', 'children', 'ratio', 'gap', 'grid', 'items', 'icon', 'icon_size', 'text_bg', 'from_layout'];
 function clearSelection() {
+  const one = S.selected ? findBox(S.selected) : null;
+  if (one?.free) return removeFree(one); // 自由な位置の要素は、要素ごと消す
   const slide = curSlide();
   const leaves = [...new Set((S.sel || []).map(findBox).filter(Boolean).flatMap((b) => slide.boxes.filter((x) => isLeaf(x) && within(x, b))))];
   const targets = leaves.filter((b) => b.src && !(b.kind === 'text' && String(b.node?.text ?? '') === ''));
@@ -4917,6 +5172,8 @@ $('#btn-split').onclick = openSplitGrid;
 $('#btn-merge').onclick = () => mergeSelection();
 $('#btn-dup').onclick = () => duplicateRow();
 $('#btn-delete').onclick = () => removeSelection();
+$('#btn-add-text').onclick = () => setTool('text');
+$('#btn-add-arrow').onclick = () => setTool('arrow');
 // 虫眼鏡：選んだボックスを左上に寄せ、いまの縦横比のまま、縦か横がプレビューいっぱいになるまで拡大する（つまみもそこまで動く）
 $('#btn-zoom-fit').onclick = () => {
   const r = S.dragSel?.rect || selectionRect();
