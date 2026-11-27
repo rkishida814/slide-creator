@@ -26,14 +26,24 @@ export function resolveDoc(doc, templates = {}) {
   out.slides = (doc.slides || []).map((s, i) => {
     if (s.use) {
       // スライドそのものに use を書いた場合は root に展開する
-      const { id, background, use, fill, ...rest } = s;
+      const { id, background, use, fill, free, ...rest } = s;
       const node = annotate({ use, fill, ...rest }, 'layout.yaml', ['slides', i], 'direct');
-      return { id, background, root: resolveNode(node, all, []) };
+      return { id, background, root: resolveNode(node, all, []), free: annotateFree(free, i) };
     }
     const root = annotate(s.root, 'layout.yaml', ['slides', i, 'root'], 'direct');
-    return { ...s, root: resolveNode(root, all, []) };
+    return { ...s, root: resolveNode(root, all, []), free: annotateFree(s.free, i) };
   });
   return out;
+}
+
+// 自由な位置に置く要素（スライドの free:）。テキストボックスと矢印。分割の木とは別に、スライドの上に重ねる
+function annotateFree(free, i) {
+  if (!Array.isArray(free)) return [];
+  return free.map((f, k) => {
+    const n = f && typeof f === 'object' && !Array.isArray(f) ? f : {};
+    n.__src = { file: 'layout.yaml', path: ['slides', i, 'free', k], mode: 'direct' };
+    return n;
+  });
 }
 
 // 文字だけ・空のノードも、編集先を付けられるようにオブジェクトにする

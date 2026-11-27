@@ -38,6 +38,21 @@ export async function buildPPTX(PptxGen, layout, imageRef, opts = {}) {
           fill: e.fill ? { color: hex(e.fill) } : { type: 'none' },
           line: e.border ? { color: hex(e.border.color, '000000'), width: e.border.width ?? 1 } : { type: 'none' },
         });
+      } else if (e.type === 'arrow') {
+        // 矢印は PowerPoint の線（矢じりは「三角」）。右上・左下に向かう線は、上下か左右を反転して表す
+        const ends = { end: ['none', 'triangle'], start: ['triangle', 'none'], both: ['triangle', 'triangle'], none: ['none', 'none'] }[e.head] || ['none', 'triangle'];
+        slide.addShape(pres.ShapeType.line, {
+          x: Math.min(e.x1, e.x2) * k,
+          y: Math.min(e.y1, e.y2) * k,
+          w: Math.abs(e.x2 - e.x1) * k,
+          h: Math.abs(e.y2 - e.y1) * k,
+          flipH: e.x2 < e.x1,
+          flipV: e.y2 < e.y1,
+          line: { color: hex(e.color, '000000'), width: e.width, beginArrowType: ends[0], endArrowType: ends[1] },
+          objectName: e.path,
+        });
+        // 光彩は pptxgenjs で付けられないので、書き出した後で足す（finishPPTX）
+        if (e.glow) (pres.__shapeGlows ||= {})[e.path] = e.glow;
       } else if (e.type === 'missing') {
         slide.addShape(pres.ShapeType.rect, { ...box, fill: { color: 'FFDDDD' }, line: { color: 'FF0000', width: 1 } });
         slide.addText(`画像が無い: ${e.src}`, { ...box, fontSize: 10, color: 'CC0000', align: 'center', valign: 'middle' });
@@ -151,6 +166,12 @@ export async function finishPPTX(pres, JSZip, type) {
     xml = xml.replace(/<a:(latin|ea|cs) typeface="([^"|]*)\|([^"]*)"([^>]*?)\/>/g, (m, kind, latin, ja, rest) =>
       kind === 'ea' ? `<a:ea typeface="${ja}"${rest.replace(/charset="[^"]*"/, 'charset="-128"')}/>` : `<a:${kind} typeface="${latin}"${rest}/>`);
     xml = xml.replace(/typeface="([^"|]*)\|[^"]*"/g, 'typeface="$1"');
+    // 矢印の光彩：名前（objectName）で図形を探し、図形の書式に PowerPoint の「光彩」を足す
+    for (const [nm, g] of Object.entries(pres.__shapeGlows || {})) {
+      const q = nm.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const eff = `<a:effectLst><a:glow rad="${Math.round(g.size * 12700)}"><a:srgbClr val="${hex(g.color, 'FFFF00').toUpperCase()}"><a:alpha val="${Math.round(Math.max(0, Math.min(1, g.opacity)) * 100000)}"/></a:srgbClr></a:glow></a:effectLst>`;
+      xml = xml.replace(new RegExp(`(<p:sp>(?:(?!<\\/p:sp>)[\\s\\S])*?name="${q}"(?:(?!<\\/p:sp>)[\\s\\S])*?)(<\\/p:spPr>)`), (m, a, b) => a.replace(/<a:effectLst\/>|<a:effectLst>[\s\S]*?<\/a:effectLst>/, '') + eff + b);
+    }
     zip.file(name, xml);
   }
   return zip.generateAsync({ type, compression: 'DEFLATE' });

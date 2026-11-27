@@ -144,6 +144,43 @@ function pos(r, L) {
   return `left:${L(r.x)};top:${L(r.y)};width:${L(r.w)};height:${L(r.h)}`;
 }
 
+// 矢印：線と矢じり（三角）を SVG で描く。矢じりの大きさは PowerPoint の「三角」（中）に近づけ、長さ・幅とも線の太さの 3 倍。
+// 光彩は、ぼかした影を重ねて近似する（PPTX では PowerPoint の「光彩」）
+const r4 = (v) => +v.toFixed(4);
+export function arrowGeom(e) {
+  const { x1, y1, x2, y2, wu } = e;
+  const len = Math.hypot(x2 - x1, y2 - y1) || 1e-9;
+  const ux = (x2 - x1) / len;
+  const uy = (y2 - y1) / len;
+  const hl = Math.min(wu * 3, len / (e.head === 'both' ? 2 : 1));
+  const hw = wu * 1.5;
+  const tri = (tx, ty, dx, dy) => [[tx, ty], [tx - dx * hl - dy * hw, ty - dy * hl + dx * hw], [tx - dx * hl + dy * hw, ty - dy * hl - dx * hw]];
+  const heads = [];
+  let a = [x1, y1];
+  let b = [x2, y2];
+  if (e.head === 'end' || e.head === 'both') {
+    heads.push(tri(x2, y2, ux, uy));
+    b = [x2 - ux * hl * 0.9, y2 - uy * hl * 0.9];
+  }
+  if (e.head === 'start' || e.head === 'both') {
+    heads.push(tri(x1, y1, -ux, -uy));
+    a = [x1 + ux * hl * 0.9, y1 + uy * hl * 0.9];
+  }
+  return { a, b, heads };
+}
+function arrowSVG(e, L) {
+  const R = e.rect;
+  const { a, b, heads } = arrowGeom(e);
+  const col = color(e.color);
+  const g = e.glow;
+  const filt = g ? `filter:${[0.25, 0.5, 1].map((k) => `drop-shadow(0 0 ${L(e.glowU * k)} ${rgba(g.color, g.opacity, '#ffff00')})`).join(' ')};` : '';
+  const pts = (t) => t.map((p) => p.map(r4).join(',')).join(' ');
+  return `<svg data-path="${esc(e.path)}" class="arw" xmlns="http://www.w3.org/2000/svg" viewBox="${r4(R.x)} ${r4(R.y)} ${r4(R.w)} ${r4(R.h)}" style="position:absolute;${pos(R, L)};overflow:visible;pointer-events:none;${filt}">`
+    + `<line x1="${r4(a[0])}" y1="${r4(a[1])}" x2="${r4(b[0])}" y2="${r4(b[1])}" stroke="${col}" stroke-width="${r4(e.wu)}" stroke-linecap="butt"/>`
+    + heads.map((t) => `<polygon points="${pts(t)}" fill="${col}"/>`).join('')
+    + '</svg>';
+}
+
 function renderElement(e, L, opts) {
   const data = `data-path="${esc(e.path)}"`;
   if (e.type === 'rect') {
@@ -151,6 +188,7 @@ function renderElement(e, L, opts) {
     const bc = e.border ? color(e.border.color) : 'transparent';
     return `<div ${data} style="${pos(e.rect, L)};background:${e.fill ? color(e.fill) : 'transparent'};border:${bw} solid ${bc}"></div>`;
   }
+  if (e.type === 'arrow') return arrowSVG(e, L);
   if (e.type === 'missing') return `<div ${data} class="missing" style="${pos(e.rect, L)}"></div>`;
   if (e.type === 'image') {
     const [l, t, r, b] = e.crop;

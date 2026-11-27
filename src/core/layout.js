@@ -1,7 +1,7 @@
 // 配置の計算。layout.yaml（テンプレート展開済み）を受け取り、各ノードの枠と、
 // 描く要素（rect / image / text）の絶対座標をキャンバスの単位で返す。
 // ファイルやブラウザに依存しない（ブラウザ版でもそのまま使う）。
-import { assertUnit, toUnit, parseBox, defaultPadding, imagePadding, isBgTree } from './units.js';
+import { assertUnit, toUnit, convert, parseBox, defaultPadding, imagePadding, isBgTree } from './units.js';
 
 // 親から子へ引き継ぐ設定
 const INHERIT = ['align', 'valign', 'fit', 'font', 'line_height', 'para_space'];
@@ -43,12 +43,47 @@ export function layoutDoc(doc, env) {
     const inh = pickInherit(doc.defaults || {}, {});
     pushBackground(slide.background ?? doc.background, { x: 0, y: 0, w: W, h: H }, id, ctx);
     walk(slide.root, { x: 0, y: 0, w: W, h: H }, inh, `${id}`, ctx, 0, null);
+    // 自由な位置の要素は、分割の木の上に重ねる（後に書いたものほど上）
+    (slide.free || []).forEach((f, k) => layoutFree(f, k, inh, ctx));
     return { id, rect: { x: 0, y: 0, w: W, h: H }, boxes: ctx.boxes, bgBoxes: ctx.bgBoxes, elements: ctx.elements, issues: ctx.issues };
   });
   const ids = slides.map((s) => s.id);
   const dup = ids.filter((x, i) => ids.indexOf(x) !== i);
   if (dup.length) throw new Error(`スライドの id が重複: ${dup.join(', ')}`);
   return { unit, width: W, height: H, font: doc.defaults?.font, slides, issues };
+}
+
+// 自由な位置の要素。テキストボックス {x, y, w, h, text, …}（ふつうのボックスと同じ設定が書ける）と、
+// 矢印 {arrow: [x1, y1, x2, y2], width（pt）, color, head: end | both | none, glow}
+export const ARROW_DEFAULT = { width: 3, color: '#000000', head: 'end' };
+function layoutFree(f, k, inh, ctx) {
+  const path = f.id ? `${ctx.slideId}/${f.id}` : `${ctx.slideId}/free${k}`;
+  const u = ctx.unit;
+  if (f.arrow != null) {
+    const a = Array.isArray(f.arrow) ? f.arrow.map((v) => toUnit(v, u)) : [];
+    if (a.length !== 4 || a.some((v) => !Number.isFinite(v))) {
+      ctx.issues.push({ level: 'error', path, msg: 'arrow は [x1, y1, x2, y2]（始点と終点）' });
+      return;
+    }
+    const [x1, y1, x2, y2] = a;
+    const width = Number(f.width ?? ARROW_DEFAULT.width);
+    const head = ['end', 'both', 'none', 'start'].includes(f.head) ? f.head : ARROW_DEFAULT.head;
+    const g = f.glow ? (f.glow === true ? {} : f.glow) : null;
+    const glow = g ? { color: g.color ?? '#ffff00', size: Number(g.size ?? 6), opacity: Number(g.opacity ?? 1) } : null;
+    // 選ぶための範囲（線の太さと矢じりの分だけ広げる）と、描く範囲（光彩の分も広げる）
+    const m = convert(width * 2, 'pt', u);
+    const mg = m + (glow ? convert(glow.size * 1.5, 'pt', u) : 0);
+    const bb = (e) => ({ x: Math.min(x1, x2) - e, y: Math.min(y1, y2) - e, w: Math.abs(x2 - x1) + 2 * e, h: Math.abs(y2 - y1) + 2 * e });
+    const box = { path, id: f.id || null, kind: 'arrow', rect: bb(m), depth: 1, parent: null, src: f.__src || null, template: null, free: true };
+    Object.defineProperties(box, { node: { value: f }, inherited: { value: inh }, style: { value: inh } });
+    ctx.boxes.push(box);
+    ctx.elements.push({ type: 'arrow', path, rect: bb(mg), x1, y1, x2, y2, width, wu: convert(width, 'pt', u), color: f.color ?? ARROW_DEFAULT.color, head, glow, glowU: glow ? convert(glow.size, 'pt', u) : 0 });
+    return;
+  }
+  const rect = { x: toUnit(f.x ?? 0, u), y: toUnit(f.y ?? 0, u), w: toUnit(f.w ?? 5, u), h: toUnit(f.h ?? 2, u) };
+  const n0 = ctx.boxes.length;
+  walk(f, rect, inh, path, ctx, 1, null);
+  if (ctx.boxes[n0]) ctx.boxes[n0].free = true;
 }
 
 function pickInherit(node, base) {
