@@ -123,7 +123,9 @@ html, body { margin: 0; padding: 0; background: #fff; }
 .txt > div { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 文字の下地：文字の塊の幅に縮め（折り返す文字は枠の幅いっぱい）、外側に margin の分だけ広げる（広げた分は影で描き、文字の位置を変えない） */
 .txt > div.tb { max-width: 100%; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-.txt .j { font-family: var(--ja); }
+/* 日本語の字の部分は、行の高さを広げない（英語用と日本語用のフォントで、行の高さの帯の上下の位置が違うため、
+   広げると日本語の入った行だけが「文字の大きさ × 行間」より少し高くなり、左右に並ぶ列の行がずれていく） */
+.txt .j { font-family: var(--ja); line-height: 0; }
 /* 箇条書き：行頭に「•」。折り返した行は文字の頭に揃える */
 .pa.li { position: relative; padding-left: 1.1em; }
 .pa.li::before { content: '\\2022'; position: absolute; left: 0.1em; }
